@@ -1,0 +1,65 @@
+{
+  "name": "@ai-outfit-studio/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI Outfit Studio desktop application",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k -n renderer,electron-build,electron -c auto \"npm:dev:renderer\" \"npm:dev:electron-build\" \"npm:dev:electron\"",
+    "dev:renderer": "vite --host 127.0.0.1",
+    "dev:electron-build": "tsc -p tsconfig.electron.json --watch --preserveWatchOutput",
+    "dev:electron": "wait-on tcp:5173 file:dist-electron/main.js && cross-env AOS_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "build": "npm run typecheck && npm run build:renderer && npm run build:electron",
+    "build:renderer": "vite build",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "start": "electron .",
+    "package:win": "npm run build && electron-builder --win nsis"
+  },
+  "dependencies": {
+    "@ai-outfit-studio/common": "0.1.0",
+    "@ai-outfit-studio/vrm-engine": "0.1.0",
+    "@pixiv/three-vrm": "^3.5.5",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@types/three": "^0.185.0",
+    "@vitejs/plugin-react": "^6.0.3",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.0.0",
+    "electron": "^43.2.0",
+    "electron-builder": "^26.15.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.0.0",
+    "wait-on": "^8.0.4"
+  },
+  "build": {
+    "appId": "studio.aioutfit.desktop",
+    "productName": "AI Outfit Studio",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  }
+}

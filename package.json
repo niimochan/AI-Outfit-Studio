@@ -1,0 +1,20 @@
+{
+  "name": "ai-outfit-studio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI-assisted clothing authoring suite for VRM and VRoid avatars.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.12.0",
+    "npm": ">=10.0.0"
+  },
+  "scripts": {
+    "dev": "npm run dev -w @ai-outfit-studio/desktop",
+    "build": "npm run build -w @ai-outfit-studio/desktop",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "package:win": "npm run package:win -w @ai-outfit-studio/desktop"
+  }
+}
