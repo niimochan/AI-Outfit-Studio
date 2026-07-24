@@ -26,7 +26,7 @@ React Renderer
 
 Common Package
   ├─ Application constants
-  ├─ Schema 2 project types
+  ├─ Schema 3 project and texture document types
   ├─ Asset metadata
   └─ Material override contract
 

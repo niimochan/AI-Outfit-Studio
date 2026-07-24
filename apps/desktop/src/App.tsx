@@ -3,6 +3,7 @@ import type {
   AosAssetKind,
   AosMaterialOverride,
   AosProjectManifest,
+  AosTextureDocument,
   AosRecentProject,
   HydratedProjectPayload,
   NativeFilePayload,
@@ -11,9 +12,18 @@ import {
   APP_NAME,
   APP_VERSION,
   createProjectManifest,
+  textureDocumentAssetId,
 } from '@ai-outfit-studio/common';
 import type { VrmLoadResult, VrmMaterialInfo, VrmStageStats } from '@ai-outfit-studio/vrm-engine';
 import { VrmViewport } from './components/VrmViewport';
+import { TextureEditor } from './components/TextureEditor';
+import {
+  canvasToPngBlob,
+  getImageDimensions,
+  renderTextureDocument,
+  type TextureDocumentOutput,
+  type TextureSourceAsset,
+} from './texture/texture-renderer';
 import {
   disposeRuntimeAsset,
   disposeRuntimeAssets,
@@ -27,7 +37,9 @@ type CameraCommand = 'fit' | 'reset' | null;
 type SelectedItem =
   | { kind: 'project' }
   | { kind: 'avatar'; id: string }
-  | { kind: 'reference' | 'template'; id: string };
+  | { kind: 'reference' | 'template'; id: string }
+  | { kind: 'texture-document'; id: string };
+type WorkspaceMode = '3d' | 'texture';
 type Notice = { tone: 'info' | 'warning' | 'error'; message: string } | null;
 
 const initialStats: VrmStageStats = {
@@ -54,6 +66,8 @@ export function App() {
   const referenceInputRef = useRef<HTMLInputElement>(null);
   const templateInputRef = useRef<HTMLInputElement>(null);
   const shellRef = useRef<HTMLDivElement>(null);
+  const textureOutputRef = useRef<TextureDocumentOutput[]>([]);
+  const textureRenderGenerationRef = useRef(0);
   const runtimeAssetsRef = useRef<{ avatar: RuntimeAsset | null; references: RuntimeAsset[]; templates: RuntimeAsset[] }>({ avatar: null, references: [], templates: [] });
 
   const [project, setProject] = useState<AosProjectManifest>(() => createProjectManifest());
@@ -63,6 +77,10 @@ export function App() {
   const [avatar, setAvatar] = useState<RuntimeAsset | null>(null);
   const [references, setReferences] = useState<RuntimeAsset[]>([]);
   const [templates, setTemplates] = useState<RuntimeAsset[]>([]);
+  const [textureDocuments, setTextureDocuments] = useState<AosTextureDocument[]>([]);
+  const [textureOutputs, setTextureOutputs] = useState<TextureDocumentOutput[]>([]);
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('3d');
+  const [activeTextureDocumentId, setActiveTextureDocumentId] = useState<string | null>(null);
   const [materials, setMaterials] = useState<VrmMaterialInfo[]>([]);
   const [selectedMaterialKey, setSelectedMaterialKey] = useState<string | null>(null);
   const [materialOverrides, setMaterialOverrides] = useState<AosMaterialOverride[]>([]);
@@ -211,7 +229,8 @@ export function App() {
       templates: templates.map((asset) => asset.meta),
     },
     materialOverrides,
-  }), [avatar, materialOverrides, project, references, templates]);
+    textureDocuments,
+  }), [avatar, materialOverrides, project, references, templates, textureDocuments]);
 
   const confirmDiscard = useCallback(async (): Promise<boolean> => {
     if (!isDirty) return true;
@@ -228,6 +247,10 @@ export function App() {
     setAvatar(null);
     setReferences([]);
     setTemplates([]);
+    setTextureDocuments([]);
+    setTextureOutputs((current) => { current.forEach((output) => URL.revokeObjectURL(output.previewUrl)); return []; });
+    setWorkspaceMode('3d');
+    setActiveTextureDocumentId(null);
     setMaterials([]);
     setSelectedMaterialKey(null);
     setMaterialOverrides([]);
@@ -272,6 +295,9 @@ export function App() {
     setAvatar(nextAvatar);
     setReferences(nextReferences);
     setTemplates(nextTemplates);
+    setTextureDocuments(payload.manifest.textureDocuments ?? []);
+    setWorkspaceMode('3d');
+    setActiveTextureDocumentId(payload.manifest.textureDocuments?.[0]?.id ?? null);
     setMaterialOverrides(payload.manifest.materialOverrides ?? []);
     setMaterials([]);
     setSelectedMaterialKey(null);
@@ -362,19 +388,39 @@ export function App() {
         disposeRuntimeAsset(removed);
         return current.filter((asset) => asset.meta.id !== id);
       });
+      setTextureDocuments((current) => current.map((document) => ({
+        ...document,
+        layers: document.layers.filter((layer) => layer.sourceAssetId !== id),
+        updatedAt: new Date().toISOString(),
+      })));
     } else {
       setTemplates((current) => {
         const removed = current.find((asset) => asset.meta.id === id);
         disposeRuntimeAsset(removed);
         return current.filter((asset) => asset.meta.id !== id);
       });
+      const removedDocumentIds = textureDocuments.filter((document) => document.templateAssetId === id).map((document) => document.id);
+      const removedOutputIds = new Set(removedDocumentIds.map(textureDocumentAssetId));
+      setTextureDocuments((current) => current
+        .filter((document) => document.templateAssetId !== id)
+        .map((document) => ({
+          ...document,
+          layers: document.layers.filter((layer) => layer.sourceAssetId !== id),
+          updatedAt: new Date().toISOString(),
+        })));
       setMaterialOverrides((current) => current.map((override) =>
-        override.textureAssetId === id ? { ...override, textureAssetId: null } : override,
+        override.textureAssetId === id || (override.textureAssetId && removedOutputIds.has(override.textureAssetId))
+          ? { ...override, textureAssetId: null }
+          : override,
       ));
+      if (activeTextureDocumentId && removedDocumentIds.includes(activeTextureDocumentId)) {
+        setActiveTextureDocumentId(null);
+        setWorkspaceMode('3d');
+      }
     }
     setSelectedItem({ kind: 'project' });
     setIsDirty(true);
-  }, [avatar]);
+  }, [activeTextureDocumentId, avatar, textureDocuments]);
 
   const handleLoadStart = useCallback(() => {
     setLoadState('loading');
@@ -400,6 +446,134 @@ export function App() {
   const handleMaterialError = useCallback((message: string) => {
     showNotice({ tone: 'error', message });
   }, [showNotice]);
+
+
+  const textureSourceAssets = useMemo<TextureSourceAsset[]>(() => [
+    ...references.map((asset) => ({ id: asset.meta.id, name: asset.meta.name, file: asset.file, previewUrl: asset.previewUrl })),
+    ...templates.map((asset) => ({ id: asset.meta.id, name: asset.meta.name, file: asset.file, previewUrl: asset.previewUrl })),
+  ], [references, templates]);
+
+  const activeTextureDocument = useMemo(
+    () => textureDocuments.find((document) => document.id === activeTextureDocumentId) ?? null,
+    [activeTextureDocumentId, textureDocuments],
+  );
+
+  const createTextureDocument = useCallback(async (template: RuntimeAsset) => {
+    try {
+      const dimensions = await getImageDimensions(template.file);
+      const now = new Date().toISOString();
+      const next: AosTextureDocument = {
+        id: crypto.randomUUID(),
+        name: `${template.meta.name.replace(/\.[^.]+$/, '')} Edit`,
+        templateAssetId: template.meta.id,
+        width: dimensions.width,
+        height: dimensions.height,
+        maskToTemplateAlpha: true,
+        showTemplateBase: true,
+        layers: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      setTextureDocuments((current) => [...current, next]);
+      setActiveTextureDocumentId(next.id);
+      setWorkspaceMode('texture');
+      setSelectedItem({ kind: 'texture-document', id: next.id });
+      setIsDirty(true);
+      showNotice({ tone: 'info', message: `テクスチャ編集を開始しました：${next.name}` });
+    } catch (error) {
+      showNotice({ tone: 'error', message: error instanceof Error ? error.message : 'テンプレートを開けませんでした。' });
+    }
+  }, [showNotice]);
+
+  const openTextureDocument = useCallback((documentId: string) => {
+    setActiveTextureDocumentId(documentId);
+    setWorkspaceMode('texture');
+    setSelectedItem({ kind: 'texture-document', id: documentId });
+  }, []);
+
+  const updateTextureDocument = useCallback((nextDocument: AosTextureDocument) => {
+    setTextureDocuments((current) => current.map((document) => document.id === nextDocument.id ? nextDocument : document));
+    setIsDirty(true);
+  }, []);
+
+  const removeTextureDocument = useCallback((documentId: string) => {
+    const outputId = textureDocumentAssetId(documentId);
+    setTextureDocuments((current) => current.filter((document) => document.id !== documentId));
+    setMaterialOverrides((current) => current.map((override) => override.textureAssetId === outputId ? { ...override, textureAssetId: null } : override));
+    if (activeTextureDocumentId === documentId) {
+      setActiveTextureDocumentId(null);
+      setWorkspaceMode('3d');
+    }
+    setSelectedItem({ kind: 'project' });
+    setIsDirty(true);
+  }, [activeTextureDocumentId]);
+
+  const exportTextureDocument = useCallback(async (document: AosTextureDocument) => {
+    try {
+      const sourceMap = new Map(textureSourceAssets.map((asset) => [asset.id, asset]));
+      const canvas = await renderTextureDocument(document, sourceMap);
+      const blob = await canvasToPngBlob(canvas);
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      const defaultName = `${document.name.replace(/[\\/:*?"<>|]/g, '_') || 'texture'}.png`;
+      const desktop = window.aosDesktop;
+      if (desktop) {
+        const result = await desktop.exportPng({ defaultName, data: bytes });
+        if (!result.canceled) showNotice({ tone: 'info', message: `PNGを書き出しました：${filePathName(result.path)}` });
+      } else {
+        const url = URL.createObjectURL(blob);
+        const anchor = window.document.createElement('a');
+        anchor.href = url;
+        anchor.download = defaultName;
+        anchor.click();
+        URL.revokeObjectURL(url);
+      }
+    } catch (error) {
+      showNotice({ tone: 'error', message: error instanceof Error ? error.message : 'PNGを書き出せませんでした。' });
+    }
+  }, [showNotice, textureSourceAssets]);
+
+  useEffect(() => {
+    const generation = ++textureRenderGenerationRef.current;
+    const timer = window.setTimeout(() => {
+      if (textureDocuments.length === 0) {
+        setTextureOutputs((current) => {
+          current.forEach((output) => URL.revokeObjectURL(output.previewUrl));
+          return [];
+        });
+        return;
+      }
+      const assetMap = new Map(textureSourceAssets.map((asset) => [asset.id, asset]));
+      void Promise.all(textureDocuments.map(async (document) => {
+        const canvas = await renderTextureDocument(document, assetMap);
+        const blob = await canvasToPngBlob(canvas);
+        const name = `${document.name.replace(/\.[^.]+$/, '')}.png`;
+        const file = new File([blob], name, { type: 'image/png', lastModified: Date.now() });
+        return {
+          id: textureDocumentAssetId(document.id),
+          documentId: document.id,
+          name,
+          file,
+          previewUrl: URL.createObjectURL(blob),
+          width: document.width,
+          height: document.height,
+        } satisfies TextureDocumentOutput;
+      })).then((nextOutputs) => {
+        if (generation !== textureRenderGenerationRef.current) {
+          nextOutputs.forEach((output) => URL.revokeObjectURL(output.previewUrl));
+          return;
+        }
+        setTextureOutputs((current) => {
+          current.forEach((output) => URL.revokeObjectURL(output.previewUrl));
+          return nextOutputs;
+        });
+      }).catch((error: unknown) => {
+        if (generation === textureRenderGenerationRef.current) {
+          showNotice({ tone: 'error', message: error instanceof Error ? error.message : '編集テクスチャのプレビュー生成に失敗しました。' });
+        }
+      });
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [showNotice, textureDocuments, textureSourceAssets]);
 
   useEffect(() => {
     void window.aosDesktop?.getAppVersion().then(setElectronVersion);
@@ -449,20 +623,26 @@ export function App() {
     runtimeAssetsRef.current = { avatar, references, templates };
   }, [avatar, references, templates]);
 
+  useEffect(() => {
+    textureOutputRef.current = textureOutputs;
+  }, [textureOutputs]);
+
   useEffect(() => () => {
     disposeRuntimeAsset(runtimeAssetsRef.current.avatar);
     disposeRuntimeAssets(runtimeAssetsRef.current.references);
     disposeRuntimeAssets(runtimeAssetsRef.current.templates);
+    textureOutputRef.current.forEach((output) => URL.revokeObjectURL(output.previewUrl));
   }, []);
 
   const statusLabel = useMemo(() => {
+    if (workspaceMode === 'texture' && activeTextureDocument) return `2D編集中：${activeTextureDocument.name}`;
     switch (loadState) {
       case 'loading': return progress === null ? '読み込み中' : `読み込み中 ${Math.round(progress * 100)}%`;
       case 'ready': return 'VRM表示準備完了';
       case 'error': return 'VRMエラー';
       default: return isDirty ? '未保存の変更あり' : 'プロジェクト準備完了';
     }
-  }, [isDirty, loadState, progress]);
+  }, [activeTextureDocument, isDirty, loadState, progress, workspaceMode]);
 
   const selectedAsset = useMemo(() => {
     if (selectedItem.kind === 'avatar') return avatar;
@@ -471,7 +651,10 @@ export function App() {
     return null;
   }, [avatar, references, selectedItem, templates]);
 
-  const activePreview = selectedAsset?.previewUrl ? selectedAsset : null;
+  const selectedTextureDocument = selectedItem.kind === 'texture-document'
+    ? textureDocuments.find((document) => document.id === selectedItem.id) ?? null
+    : null;
+  const activePreview = workspaceMode === '3d' && selectedAsset?.previewUrl ? selectedAsset : null;
   const selectedMaterial = useMemo(
     () => materials.find((material) => material.key === selectedMaterialKey) ?? null,
     [materials, selectedMaterialKey],
@@ -490,8 +673,11 @@ export function App() {
     offsetY: selectedMaterialOverride?.offsetY ?? 0,
   } : null, [selectedMaterial, selectedMaterialOverride]);
   const textureAssetInputs = useMemo(
-    () => templates.map((asset) => ({ id: asset.meta.id, file: asset.file })),
-    [templates],
+    () => [
+      ...templates.map((asset) => ({ id: asset.meta.id, file: asset.file })),
+      ...textureOutputs.map((output) => ({ id: output.id, file: output.file })),
+    ],
+    [templates, textureOutputs],
   );
 
   const updateSelectedMaterial = useCallback((patch: Partial<AosMaterialOverride>) => {
@@ -565,7 +751,7 @@ export function App() {
 
       <aside className="sidebar left-sidebar">
         <section className="panel-section project-actions">
-          <div className="section-heading"><span>PROJECT</span><small>Material Preview</small></div>
+          <div className="section-heading"><span>PROJECT</span><small>Texture Editor</small></div>
           <div className="button-grid">
             <button className="secondary-button" type="button" onClick={() => void newProject()}>新規 <kbd>Ctrl+N</kbd></button>
             <button className="secondary-button" type="button" onClick={() => void openProject()}>開く <kbd>Ctrl+O</kbd></button>
@@ -575,14 +761,14 @@ export function App() {
         </section>
 
         <section className="panel-section asset-list">
-          <div className="section-heading"><span>ASSETS</span><small>{(avatar ? 1 : 0) + references.length + templates.length}</small></div>
+          <div className="section-heading"><span>ASSETS</span><small>{(avatar ? 1 : 0) + references.length + templates.length + textureDocuments.length}</small></div>
 
           <div className="asset-group-heading">
             <span>AVATAR</span>
             <button type="button" onClick={() => void addNativeAssets('avatar')}>＋</button>
           </div>
           {avatar ? (
-            <button className={`asset-row ${selectedItem.kind === 'avatar' ? 'active' : ''}`} type="button" onClick={() => setSelectedItem({ kind: 'avatar', id: avatar.meta.id })}>
+            <button className={`asset-row ${selectedItem.kind === 'avatar' ? 'active' : ''}`} type="button" onClick={() => { setSelectedItem({ kind: 'avatar', id: avatar.meta.id }); setWorkspaceMode('3d'); }}>
               <span className="asset-icon">3D</span>
               <span className="asset-copy"><strong>{avatar.meta.name}</strong><small>{formatBytes(avatar.meta.size)}</small></span>
             </button>
@@ -607,12 +793,26 @@ export function App() {
             <button type="button" onClick={() => void addNativeAssets('template')}>＋</button>
           </div>
           {templates.map((asset) => (
-            <button className={`asset-row ${selectedItem.kind === 'template' && selectedItem.id === asset.meta.id ? 'active' : ''}`} type="button" key={asset.meta.id} onClick={() => setSelectedItem({ kind: 'template', id: asset.meta.id })}>
+            <button className={`asset-row ${selectedItem.kind === 'template' && selectedItem.id === asset.meta.id ? 'active' : ''}`} type="button" key={asset.meta.id} onClick={() => setSelectedItem({ kind: 'template', id: asset.meta.id })} onDoubleClick={() => void createTextureDocument(asset)}>
               {asset.previewUrl ? <img className="asset-thumb checkerboard" src={asset.previewUrl} alt="" /> : <span className="asset-icon">UV</span>}
               <span className="asset-copy"><strong>{asset.meta.name}</strong><small>{formatBytes(asset.meta.size)}</small></span>
             </button>
           ))}
           {templates.length === 0 && <button className="empty-asset-row" type="button" onClick={() => void addNativeAssets('template')}>テンプレートを追加</button>}
+
+          <div className="asset-group-heading">
+            <span>TEXTURE DOCS <b>{textureDocuments.length}</b></span>
+          </div>
+          {textureDocuments.map((document) => {
+            const output = textureOutputs.find((item) => item.documentId === document.id);
+            return (
+              <button className={`asset-row ${selectedItem.kind === 'texture-document' && selectedItem.id === document.id ? 'active' : ''}`} type="button" key={document.id} onClick={() => openTextureDocument(document.id)}>
+                {output ? <img className="asset-thumb checkerboard" src={output.previewUrl} alt="" /> : <span className="asset-icon">2D</span>}
+                <span className="asset-copy"><strong>{document.name}</strong><small>{document.width} × {document.height} · {document.layers.length} layers</small></span>
+              </button>
+            );
+          })}
+          {textureDocuments.length === 0 && <div className="asset-empty-copy">テンプレートを選択し「2D編集を開始」</div>}
         </section>
 
         {recentProjects.length > 0 && (
@@ -633,45 +833,58 @@ export function App() {
       </aside>
 
       <main className="workspace">
-        <VrmViewport
-          selectedFile={avatar?.file ?? null}
-          materialOverrides={materialOverrides}
-          textureAssets={textureAssetInputs}
-          command={cameraCommand}
-          commandId={cameraCommandId}
-          onLoadStart={handleLoadStart}
-          onProgress={handleProgress}
-          onLoaded={handleLoaded}
-          onError={handleError}
-          onStats={handleStats}
-          onMaterialError={handleMaterialError}
-        />
+        {workspaceMode === 'texture' && activeTextureDocument ? (
+          <TextureEditor
+            document={activeTextureDocument}
+            assets={textureSourceAssets}
+            onChange={updateTextureDocument}
+            onExport={(document) => void exportTextureDocument(document)}
+            onShow3d={() => setWorkspaceMode('3d')}
+          />
+        ) : (
+          <>
+            <VrmViewport
+              selectedFile={avatar?.file ?? null}
+              materialOverrides={materialOverrides}
+              textureAssets={textureAssetInputs}
+              command={cameraCommand}
+              commandId={cameraCommandId}
+              onLoadStart={handleLoadStart}
+              onProgress={handleProgress}
+              onLoaded={handleLoaded}
+              onError={handleError}
+              onStats={handleStats}
+              onMaterialError={handleMaterialError}
+            />
 
-        <div className="viewport-toolbar">
-          <button type="button" disabled={loadState !== 'ready'} onClick={() => issueCameraCommand('fit')}>全身表示 <kbd>F</kbd></button>
-          <button type="button" onClick={() => issueCameraCommand('reset')}>カメラリセット <kbd>R</kbd></button>
-        </div>
-
-        {activePreview && (
-          <div className="reference-preview">
-            <div>
-              <strong>{selectedItem.kind === 'template' ? 'TEMPLATE PREVIEW' : 'REFERENCE PREVIEW'}</strong>
-              <button type="button" onClick={() => setSelectedItem({ kind: 'project' })}>×</button>
+            <div className="viewport-toolbar">
+              <button type="button" disabled={loadState !== 'ready'} onClick={() => issueCameraCommand('fit')}>全身表示 <kbd>F</kbd></button>
+              <button type="button" onClick={() => issueCameraCommand('reset')}>カメラリセット <kbd>R</kbd></button>
+              {activeTextureDocument && <button type="button" onClick={() => setWorkspaceMode('texture')}>2D編集へ</button>}
             </div>
-            <img className={selectedItem.kind === 'template' ? 'checkerboard' : ''} src={activePreview.previewUrl!} alt={activePreview.meta.name} />
-            <span>{activePreview.meta.name}</span>
-          </div>
-        )}
 
-        {loadState === 'loading' && (
-          <div className="loading-card">
-            <div className="spinner" />
-            <strong>VRMを解析しています</strong>
-            <span>{progress === null ? 'ファイルを展開中…' : `${Math.round(progress * 100)}%`}</span>
-          </div>
-        )}
-        {errorMessage && (
-          <div className="error-card" role="alert"><strong>読み込みエラー</strong><span>{errorMessage}</span></div>
+            {activePreview && (
+              <div className="reference-preview">
+                <div>
+                  <strong>{selectedItem.kind === 'template' ? 'TEMPLATE PREVIEW' : 'REFERENCE PREVIEW'}</strong>
+                  <button type="button" onClick={() => setSelectedItem({ kind: 'project' })}>×</button>
+                </div>
+                <img className={selectedItem.kind === 'template' ? 'checkerboard' : ''} src={activePreview.previewUrl!} alt={activePreview.meta.name} />
+                <span>{activePreview.meta.name}</span>
+              </div>
+            )}
+
+            {loadState === 'loading' && (
+              <div className="loading-card">
+                <div className="spinner" />
+                <strong>VRMを解析しています</strong>
+                <span>{progress === null ? 'ファイルを展開中…' : `${Math.round(progress * 100)}%`}</span>
+              </div>
+            )}
+            {errorMessage && (
+              <div className="error-card" role="alert"><strong>読み込みエラー</strong><span>{errorMessage}</span></div>
+            )}
+          </>
         )}
         {notice && (
           <button className={`notice-card notice-${notice.tone}`} type="button" onClick={() => setNotice(null)}>{notice.message}</button>
@@ -689,10 +902,27 @@ export function App() {
               <dt>Avatar</dt><dd>{avatar ? '1' : '0'}</dd>
               <dt>References</dt><dd>{references.length}</dd>
               <dt>Templates</dt><dd>{templates.length}</dd>
+              <dt>Texture docs</dt><dd>{textureDocuments.length}</dd>
               <dt>Materials</dt><dd>{materials.length}</dd>
               <dt>Overrides</dt><dd>{materialOverrides.length}</dd>
               <dt>Schema</dt><dd>v{project.schemaVersion}</dd>
             </dl>
+          ) : selectedTextureDocument ? (
+            <>
+              {textureOutputs.find((output) => output.documentId === selectedTextureDocument.id) && (
+                <img className="inspector-preview checkerboard" src={textureOutputs.find((output) => output.documentId === selectedTextureDocument.id)!.previewUrl} alt={selectedTextureDocument.name} />
+              )}
+              <dl className="inspector-grid">
+                <dt>Name</dt><dd>{selectedTextureDocument.name}</dd>
+                <dt>Canvas</dt><dd>{selectedTextureDocument.width} × {selectedTextureDocument.height}</dd>
+                <dt>Layers</dt><dd>{selectedTextureDocument.layers.length}</dd>
+                <dt>Alpha mask</dt><dd>{selectedTextureDocument.maskToTemplateAlpha ? 'ON' : 'OFF'}</dd>
+                <dt>Base</dt><dd>{selectedTextureDocument.showTemplateBase ? '表示' : '非表示'}</dd>
+              </dl>
+              <button className="primary-button inspector-action" type="button" onClick={() => openTextureDocument(selectedTextureDocument.id)}>2D編集を開く</button>
+              <button className="secondary-button inspector-action" type="button" onClick={() => void exportTextureDocument(selectedTextureDocument)}>PNG書き出し</button>
+              <button className="danger-button" type="button" onClick={() => removeTextureDocument(selectedTextureDocument.id)}>編集ドキュメントを削除</button>
+            </>
           ) : selectedAsset ? (
             <>
               {selectedAsset.previewUrl && <img className={`inspector-preview ${selectedItem.kind === 'template' ? 'checkerboard' : ''}`} src={selectedAsset.previewUrl} alt={selectedAsset.meta.name} />}
@@ -703,6 +933,7 @@ export function App() {
                 <dt>Source</dt><dd title={selectedAsset.meta.sourcePath}>{selectedAsset.meta.sourcePath || 'Browser import'}</dd>
                 {selectedItem.kind === 'avatar' && <><dt>Format</dt><dd>{loadResult?.specVersion ?? '—'}</dd><dt>Height</dt><dd>{loadResult ? `${loadResult.height.toFixed(3)} m` : '—'}</dd><dt>Objects</dt><dd>{loadResult?.objectCount ?? '—'}</dd><dt>Materials</dt><dd>{materials.length || '—'}</dd></>}
               </dl>
+              {selectedItem.kind === 'template' && <button className="primary-button inspector-action" type="button" onClick={() => void createTextureDocument(selectedAsset)}>2D編集を開始</button>}
               <button className="danger-button" type="button" onClick={() => removeAsset(selectedAsset.meta.kind, selectedAsset.meta.id)}>プロジェクトから削除</button>
             </>
           ) : <p className="muted-copy">アセットが見つかりません。</p>}
@@ -755,10 +986,11 @@ export function App() {
                       }}
                     >
                       <option value="">元のテクスチャ</option>
-                      {templates.map((asset) => <option key={asset.meta.id} value={asset.meta.id}>{asset.meta.name}</option>)}
+                      {textureOutputs.length > 0 && <optgroup label="2D編集結果">{textureOutputs.map((output) => <option key={output.id} value={output.id}>{output.name}</option>)}</optgroup>}
+                      {templates.length > 0 && <optgroup label="テンプレート">{templates.map((asset) => <option key={asset.meta.id} value={asset.meta.id}>{asset.meta.name}</option>)}</optgroup>}
                     </select>
                   </label>
-                  {templates.length === 0 && <p className="field-help">先にVRoidテンプレート画像を追加してください。</p>}
+                  {templates.length === 0 && textureOutputs.length === 0 && <p className="field-help">先にVRoidテンプレート画像を追加してください。</p>}
 
                   <div className="material-control-row">
                     <label className="field-label compact-field">

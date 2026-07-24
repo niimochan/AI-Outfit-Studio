@@ -4,6 +4,8 @@ import type {
   AosMaterialOverride,
   AosProjectAsset,
   AosProjectManifest,
+  AosTextureDocument,
+  AosTextureLayer,
   AosRecentProject,
   HydratedProjectPayload,
   NativeFilePayload,
@@ -109,17 +111,79 @@ function normalizeMaterialOverrides(value: unknown): AosMaterialOverride[] {
   });
 }
 
+
+function normalizeTextureDocuments(value: unknown): AosTextureDocument[] {
+  if (!Array.isArray(value)) return [];
+  const finite = (input: unknown, fallback: number): number =>
+    typeof input === 'number' && Number.isFinite(input) ? input : fallback;
+  const blendModes = new Set(['source-over', 'multiply', 'screen', 'overlay']);
+
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const document = entry as Partial<AosTextureDocument>;
+    if (
+      typeof document.id !== 'string' ||
+      typeof document.name !== 'string' ||
+      typeof document.templateAssetId !== 'string' ||
+      !Array.isArray(document.layers)
+    ) return [];
+
+    const layers: AosTextureLayer[] = document.layers.flatMap((layerEntry) => {
+      if (!layerEntry || typeof layerEntry !== 'object') return [];
+      const layer = layerEntry as Partial<AosTextureLayer>;
+      if (typeof layer.id !== 'string' || typeof layer.name !== 'string' || typeof layer.sourceAssetId !== 'string') return [];
+      return [{
+        id: layer.id,
+        name: layer.name,
+        sourceAssetId: layer.sourceAssetId,
+        visible: layer.visible !== false,
+        opacity: Math.min(1, Math.max(0, finite(layer.opacity, 1))),
+        blendMode: (blendModes.has(layer.blendMode ?? '') ? layer.blendMode : 'source-over') as AosTextureLayer['blendMode'],
+        x: finite(layer.x, 0),
+        y: finite(layer.y, 0),
+        scaleX: Math.max(0.01, finite(layer.scaleX, 1)),
+        scaleY: Math.max(0.01, finite(layer.scaleY, 1)),
+        rotation: finite(layer.rotation, 0),
+        eraserStrokes: Array.isArray(layer.eraserStrokes) ? layer.eraserStrokes.flatMap((strokeEntry) => {
+          if (!strokeEntry || typeof strokeEntry !== 'object') return [];
+          const stroke = strokeEntry as { id?: unknown; x?: unknown; y?: unknown; radius?: unknown };
+          return [{
+            id: typeof stroke.id === 'string' ? stroke.id : crypto.randomUUID(),
+            x: finite(stroke.x, 0),
+            y: finite(stroke.y, 0),
+            radius: Math.min(4096, Math.max(1, finite(stroke.radius, 32))),
+          }];
+        }) : [],
+      }];
+    });
+
+    return [{
+      id: document.id,
+      name: document.name,
+      templateAssetId: document.templateAssetId,
+      width: Math.min(16384, Math.max(1, Math.round(finite(document.width, 2048)))),
+      height: Math.min(16384, Math.max(1, Math.round(finite(document.height, 2048)))),
+      maskToTemplateAlpha: document.maskToTemplateAlpha !== false,
+      showTemplateBase: document.showTemplateBase !== false,
+      layers,
+      createdAt: typeof document.createdAt === 'string' ? document.createdAt : new Date().toISOString(),
+      updatedAt: typeof document.updatedAt === 'string' ? document.updatedAt : new Date().toISOString(),
+    }];
+  });
+}
+
 function validateManifest(value: unknown): AosProjectManifest {
   if (!value || typeof value !== 'object') {
     throw new Error('プロジェクトファイルの形式が正しくありません。');
   }
 
-  const manifest = value as Partial<Omit<AosProjectManifest, 'schemaVersion' | 'materialOverrides'>> & {
+  const manifest = value as Partial<Omit<AosProjectManifest, 'schemaVersion' | 'materialOverrides' | 'textureDocuments'>> & {
     schemaVersion?: number;
     materialOverrides?: unknown;
+    textureDocuments?: unknown;
   };
   if (
-    (manifest.schemaVersion !== 1 && manifest.schemaVersion !== 2) ||
+    (manifest.schemaVersion !== 1 && manifest.schemaVersion !== 2 && manifest.schemaVersion !== 3) ||
     typeof manifest.id !== 'string' ||
     typeof manifest.name !== 'string' ||
     typeof manifest.createdAt !== 'string' ||
@@ -132,9 +196,10 @@ function validateManifest(value: unknown): AosProjectManifest {
   }
 
   return {
-    ...(manifest as Omit<AosProjectManifest, 'schemaVersion' | 'materialOverrides'>),
-    schemaVersion: 2,
+    ...(manifest as Omit<AosProjectManifest, 'schemaVersion' | 'materialOverrides' | 'textureDocuments'>),
+    schemaVersion: 3,
     materialOverrides: normalizeMaterialOverrides(manifest.materialOverrides),
+    textureDocuments: normalizeTextureDocuments(manifest.textureDocuments),
   };
 }
 
@@ -324,6 +389,21 @@ app.whenReady().then(() => {
       return [];
     }
     return Promise.all(result.filePaths.map(readNativeFile));
+  });
+
+  ipcMain.handle('texture:export-png', async (event, request: { defaultName: string; data: Uint8Array }) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const safeName = request.defaultName.replace(/[\\/:*?"<>|]/g, '_') || 'texture.png';
+    const options: Electron.SaveDialogOptions = {
+      title: 'VRoid用テクスチャPNGを書き出す',
+      defaultPath: safeName.toLowerCase().endsWith('.png') ? safeName : `${safeName}.png`,
+      filters: [{ name: 'PNG Image', extensions: ['png'] }],
+    };
+    const result = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options);
+    if (result.canceled || !result.filePath) return { canceled: true } as const;
+    const targetPath = result.filePath.toLowerCase().endsWith('.png') ? result.filePath : `${result.filePath}.png`;
+    await writeFile(targetPath, Buffer.from(request.data));
+    return { canceled: false, path: targetPath } as const;
   });
 
   ipcMain.handle('project:save', async (event, request: { path: string | null; saveAs: boolean; manifest: AosProjectManifest }) => {

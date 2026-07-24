@@ -1,6 +1,6 @@
 {
   "name": "@ai-outfit-studio/desktop",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "private": true,
   "description": "AI Outfit Studio desktop application",
   "main": "dist-electron/main.js",
@@ -17,8 +17,8 @@
     "package:win": "npm run build && electron-builder --win nsis"
   },
   "dependencies": {
-    "@ai-outfit-studio/common": "0.3.1",
-    "@ai-outfit-studio/vrm-engine": "0.3.1",
+    "@ai-outfit-studio/common": "0.4.0",
+    "@ai-outfit-studio/vrm-engine": "0.4.0",
     "@pixiv/three-vrm": "^3.5.5",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",

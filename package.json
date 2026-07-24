@@ -1,6 +1,6 @@
 {
   "name": "ai-outfit-studio",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "private": true,
   "description": "AI-assisted clothing authoring suite for VRM and VRoid avatars.",
   "workspaces": [

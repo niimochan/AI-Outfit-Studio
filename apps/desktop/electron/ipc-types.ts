@@ -22,8 +22,45 @@ export interface AosMaterialOverride {
   offsetY: number;
 }
 
+export type AosTextureBlendMode = 'source-over' | 'multiply' | 'screen' | 'overlay';
+
+export interface AosTextureEraserStroke {
+  id: string;
+  x: number;
+  y: number;
+  radius: number;
+}
+
+export interface AosTextureLayer {
+  id: string;
+  name: string;
+  sourceAssetId: string;
+  visible: boolean;
+  opacity: number;
+  blendMode: AosTextureBlendMode;
+  x: number;
+  y: number;
+  scaleX: number;
+  scaleY: number;
+  rotation: number;
+  eraserStrokes: AosTextureEraserStroke[];
+}
+
+export interface AosTextureDocument {
+  id: string;
+  name: string;
+  templateAssetId: string;
+  width: number;
+  height: number;
+  maskToTemplateAlpha: boolean;
+  showTemplateBase: boolean;
+  layers: AosTextureLayer[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AosProjectManifest {
-  schemaVersion: 2;
+  schemaVersion: 3;
   appVersion: string;
   id: string;
   name: string;
@@ -35,6 +72,7 @@ export interface AosProjectManifest {
     templates: AosProjectAsset[];
   };
   materialOverrides: AosMaterialOverride[];
+  textureDocuments: AosTextureDocument[];
 }
 
 export interface AosRecentProject {

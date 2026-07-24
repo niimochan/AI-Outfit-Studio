@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.4.0 — Texture Editor Foundation
+
+### Added
+
+- VRoidテンプレートを基準にした非破壊2Dテクスチャ編集ドキュメント
+- 画像レイヤー追加、表示、非表示、不透明度、描画順変更
+- 通常、乗算、スクリーン、オーバーレイ合成
+- 位置、X/Yスケール、回転編集
+- 円形消しゴムストロークと消去解除
+- テンプレートAlphaによるUV外マスク
+- キャンバスのズーム、パン、全体表示
+- Texture Editor内のUndo / Redo
+- 編集結果を仮想テクスチャとしてVRMマテリアルへリアルタイム適用
+- 透過PNGのネイティブ書き出し
+- `.aos` Schema 3へのレイヤー・マスク情報保存
+- Schema 1 / 2からSchema 3への自動マイグレーション
+
+### Changed
+
+- アプリケーションと全ワークスペースを0.4.0へ更新
+- Asset BrowserへTexture Documentsを追加
+- Material selectorへ2D編集結果グループを追加
+
+### Known limitations
+
+- ブラシ、選択範囲、自由変形、テキストレイヤーは未実装
+- 消しゴムは円形・固定硬度
+- 大量の4K編集ドキュメントを同時に保持するとメモリ使用量が増える
+- このビルド環境ではnpmレジストリへの接続が完了しなかったため、最終の実依存ビルドはWindows環境で確認が必要
+
 ## 0.3.1 — TypeScript 7 validation fix
 
 ### Fixed

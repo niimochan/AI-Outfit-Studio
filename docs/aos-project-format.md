@@ -1,95 +1,99 @@
-# `.aos` Project Format — Schema 2
+# `.aos` Project Format — Schema 3
 
 ## Status
 
-- Application version: 0.3.1
-- Schema version: 2
+- Application version: 0.4.0
+- Schema version: 3
 - Encoding: UTF-8 JSON
 - Storage model: linked assets
-- Backward compatibility: Schema 1 is migrated automatically
+- Backward compatibility: Schema 1 / 2を自動移行
 
-## Example
+## Top-level fields
 
 ```json
 {
-  "schemaVersion": 2,
-  "appVersion": "0.3.1",
-  "id": "7e6d90a7-...",
+  "schemaVersion": 3,
+  "appVersion": "0.4.0",
+  "id": "project-uuid",
   "name": "Akane Outfit Project",
-  "createdAt": "2026-07-24T12:00:00.000Z",
-  "updatedAt": "2026-07-25T01:00:00.000Z",
+  "createdAt": "2026-07-25T01:00:00.000Z",
+  "updatedAt": "2026-07-25T02:00:00.000Z",
   "assets": {
-    "avatar": {
-      "id": "avatar-id",
-      "kind": "avatar",
-      "name": "avatar.vrm",
-      "sourcePath": "C:\\Projects\\avatar.vrm",
-      "size": 12345678,
-      "mimeType": "model/gltf-binary",
-      "importedAt": "2026-07-24T12:05:00.000Z"
-    },
+    "avatar": null,
     "references": [],
-    "templates": [
-      {
-        "id": "texture-id",
-        "kind": "template",
-        "name": "Tops.png",
-        "sourcePath": "C:\\Projects\\Tops.png",
-        "size": 345678,
-        "mimeType": "image/png",
-        "importedAt": "2026-07-25T00:30:00.000Z"
-      }
-    ]
+    "templates": []
   },
-  "materialOverrides": [
+  "materialOverrides": [],
+  "textureDocuments": []
+}
+```
+
+## Texture document
+
+```json
+{
+  "id": "texture-document-uuid",
+  "name": "Tops Edit",
+  "templateAssetId": "template-asset-uuid",
+  "width": 2048,
+  "height": 2048,
+  "maskToTemplateAlpha": true,
+  "showTemplateBase": true,
+  "createdAt": "2026-07-25T01:10:00.000Z",
+  "updatedAt": "2026-07-25T01:20:00.000Z",
+  "layers": [
     {
-      "materialKey": "material-004",
-      "materialName": "M_CLOTH_00",
-      "textureAssetId": "texture-id",
-      "color": "#ffffff",
+      "id": "layer-uuid",
+      "name": "Reference.png",
+      "sourceAssetId": "reference-asset-uuid",
+      "visible": true,
       "opacity": 1,
-      "repeatX": 1,
-      "repeatY": 1,
-      "offsetX": 0,
-      "offsetY": 0
+      "blendMode": "source-over",
+      "x": 1024,
+      "y": 1024,
+      "scaleX": 0.8,
+      "scaleY": 0.8,
+      "rotation": 0,
+      "eraserStrokes": [
+        { "id": "stroke-uuid", "x": 530, "y": 412, "radius": 48 }
+      ]
     }
   ]
 }
 ```
 
-## Asset kinds
+### Blend modes
 
-- `avatar`: VRMモデル。1プロジェクトにつき最大1件
-- `reference`: 衣装の参考画像。複数件
-- `template`: VRoid向けUVテンプレートまたはプレビュー用テクスチャ。複数件
+- `source-over`: 通常
+- `multiply`: 乗算
+- `screen`: スクリーン
+- `overlay`: オーバーレイ
+
+## Virtual texture IDs
+
+Texture Documentの合成結果は、実ファイルではなく次の仮想IDでMaterial Overrideから参照します。
+
+```text
+texture-document:<document-id>
+```
+
+プロジェクトを開いた際は、リンクされた元画像とTexture Documentの設定からPNGを再生成します。
 
 ## Material overrides
 
-`materialOverrides`は元VRMを変更せず、アプリ内プレビューへ適用する差分設定です。
+`materialOverrides`は元VRMを変更せず、アプリ内プレビューへ適用する差分設定です。`textureAssetId`は次のいずれかです。
 
-- `materialKey`: VRMロード時に割り当てる安定化キー
-- `materialName`: UI表示と診断用の元マテリアル名
-- `textureAssetId`: `assets.templates`内の画像ID。`null`なら元テクスチャ
-- `color`: Base Colorへ乗算するsRGBカラー
-- `opacity`: 0〜1
-- `repeatX`, `repeatY`: UV繰り返し倍率
-- `offsetX`, `offsetY`: UVオフセット
+- `assets.templates`内の画像ID
+- `texture-document:<document-id>`
+- `null`：元テクスチャ
 
 ## Migration
 
-Schema 1を開いた場合、Main processが次の変換を行います。
-
-```json
-{
-  "schemaVersion": 2,
-  "materialOverrides": []
-}
-```
-
-元ファイルは開いただけでは書き換えません。次回保存時にSchema 2として保存されます。
+- Schema 1 → `materialOverrides: []`と`textureDocuments: []`を追加
+- Schema 2 → `textureDocuments: []`を追加
+- 読み込み時にメモリ上でSchema 3へ正規化
+- 元ファイルは開いただけでは変更せず、次回保存時にSchema 3で保存
 
 ## Portability
 
-Schema 2も`sourcePath`に絶対パスを保存するリンク型です。元ファイルが移動・削除された場合、アプリは該当アセットを読み込まず、見つからないパス数を通知します。
-
-ポータブルプロジェクトは将来のSchemaで導入予定です。
+Schema 3も`sourcePath`に絶対パスを保存するリンク型です。元のVRM・参考画像・テンプレートを移動または削除すると、該当レイヤーやテンプレートを復元できません。

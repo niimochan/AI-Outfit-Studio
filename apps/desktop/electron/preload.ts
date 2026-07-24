@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('aosDesktop', {
   platform: process.platform,
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   pickAssets: (kind: AosAssetKind) => ipcRenderer.invoke('asset:pick', kind),
+  exportPng: (request: { defaultName: string; data: Uint8Array }) => ipcRenderer.invoke('texture:export-png', request),
   saveProject: (request: { path: string | null; saveAs: boolean; manifest: AosProjectManifest }) =>
     ipcRenderer.invoke('project:save', request),
   openProject: () => ipcRenderer.invoke('project:open'),
