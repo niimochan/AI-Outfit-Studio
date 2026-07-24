@@ -2,22 +2,22 @@
 
 AIを活用したVRM・VRoid向け衣装制作環境です。
 
-現在のリリースは **Version 0.2 Asset & Project Foundation / Sprint 02** です。Version 0.1で実機確認済みのVRMビューアを維持しながら、`.aos`プロジェクト保存と参考画像・VRoidテンプレート管理を追加しています。
+現在のリリースは **Version 0.3 Material Preview Foundation / Sprint 03** です。VRM表示、`.aos`プロジェクト管理、参考画像・テンプレート管理に加え、VRMのマテリアルへテンプレート画像をリアルタイム適用して確認できます。
 
-## Version 0.2でできること
+## Version 0.3でできること
 
-- 新規プロジェクト作成
-- `.aos`プロジェクトの保存・名前を付けて保存・再読み込み
-- 未保存状態の表示と終了時の警告
-- 最近使用したプロジェクトの一覧
 - VRM 0.x / VRM 1.0の読み込みと3D表示
 - 回転・ズーム・パン・全身表示・カメラリセット
-- 参考画像（PNG / JPEG / WebP）の複数登録とプレビュー
-- VRoidテンプレート画像の複数登録と透過チェッカープレビュー
-- アセットInspectorとプロジェクトからの削除
-- VRM・画像のドラッグ＆ドロップ
+- VRM内のユニークなマテリアルを自動抽出
+- マテリアル名、シェーダー型、利用メッシュ数、元テクスチャ有無を表示
+- 登録済みテンプレート画像を選択マテリアルへリアルタイム適用
+- Base Color、Opacity、Repeat X/Y、Offset X/Yを編集
+- 選択マテリアルまたは全マテリアルを元の状態へ復元
+- マテリアル設定を`.aos`へ保存し、再オープン時に再適用
+- Schema 1プロジェクトをSchema 2へ自動移行
+- 参考画像・VRoidテンプレートの複数登録とプレビュー
+- 最近使用したプロジェクト、未保存警告、ネイティブファイルダイアログ
 - FPS・Triangles・Draw Callsなどのデバッグ表示
-- GitHub Actionsによる型チェック・ビルド
 
 ## 必要環境
 
@@ -28,12 +28,14 @@ AIを活用したVRM・VRoid向け衣装制作環境です。
 
 ## 起動
 
-```bash
-npm install
-npm run dev
+PowerShellでは`npm.ps1`の実行制限を避けるため、`npm.cmd`を使用してください。
+
+```powershell
+npm.cmd install
+npm.cmd run dev
 ```
 
-すでにVersion 0.1で`npm install`を実行済みで、依存関係を変更していない場合は、更新ファイルを反映したあとそのまま`npm run dev`で起動できます。`package-lock.json`を更新する場合は、改めて`npm install`を実行してください。
+または`START_DEV.bat`を実行します。
 
 ### 3D操作
 
@@ -42,6 +44,17 @@ npm run dev
 - 右ドラッグ：パン
 - `F`：モデル全体へカメラを合わせる
 - `R`：初期視点へ戻す
+
+### マテリアルプレビュー
+
+1. VRMを読み込む
+2. VRoidテンプレート画像を追加する
+3. 右側の`MATERIALS`から編集対象を選ぶ
+4. `プレビューテクスチャ`から画像を選ぶ
+5. 色、不透明度、Repeat、Offsetを調整する
+6. `.aos`を保存する
+
+この機能は現段階では**非破壊プレビュー**です。元のVRMやPNGを書き換えません。
 
 ### プロジェクト操作
 
@@ -52,23 +65,21 @@ npm run dev
 
 ## `.aos`形式について
 
-Version 0.2の`.aos`は、プロジェクト情報とローカルアセットへのリンクを保存するJSON形式です。VRMや画像そのものは`.aos`内へ埋め込みません。
-
-そのため、読み込み後に元のVRM・画像を移動または削除すると、次回オープン時に見つからないアセットとして通知されます。将来のバージョンでは、アセットをまとめたポータブルパッケージ方式を追加予定です。
+Version 0.3はSchema 2を使用します。プロジェクト情報、ローカルアセットへのリンク、マテリアルの差分設定をJSONとして保存します。VRMや画像そのものは`.aos`内へ埋め込みません。
 
 詳細は[`docs/aos-project-format.md`](docs/aos-project-format.md)を参照してください。
 
 ## ビルド
 
-```bash
-npm run typecheck
-npm run build
+```powershell
+npm.cmd run typecheck
+npm.cmd run build
 ```
 
 ## Windows向けパッケージ作成
 
-```bash
-npm run package:win
+```powershell
+npm.cmd run package:win
 ```
 
 出力先は`apps/desktop/release/`です。
@@ -81,19 +92,20 @@ AI-Outfit-Studio/
 │  └─ desktop/            Electronデスクトップアプリ
 ├─ packages/
 │  ├─ common/             共通型・プロジェクト形式
-│  └─ vrm-engine/         Three.js / VRM表示エンジン
+│  └─ vrm-engine/         Three.js / VRM / Material preview
 ├─ docs/                  設計・スプリント記録
 └─ .github/workflows/     CI
 ```
 
-## 次のスプリント候補
+## 次の開発候補
 
-1. VRMメタデータ・ボーン・マテリアルInspector
-2. 3Dビューのスクリーンショット保存
-3. 背景色・ライトプリセット
-4. テンプレート分類とメタデータ
-5. ポータブル`.aos`パッケージ
-6. ComfyUI接続の最小プラグイン
+1. マテリアル選択部分を3D上でハイライト
+2. UVテンプレートと3D表示の連動選択
+3. 3Dビューのスクリーンショット保存
+4. MToon Shade / Rim / Emission編集
+5. テクスチャレイヤー・マスク・PNG書き出し
+6. Undo / Redo
+7. ComfyUI接続の最小プラグイン
 
 ## ライセンス
 

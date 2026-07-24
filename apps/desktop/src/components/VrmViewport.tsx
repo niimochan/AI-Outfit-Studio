@@ -1,8 +1,16 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { AosMaterialOverride } from '@ai-outfit-studio/common';
 import { VrmStage, type VrmLoadResult, type VrmStageStats } from '@ai-outfit-studio/vrm-engine';
+
+interface TextureAssetInput {
+  id: string;
+  file: File;
+}
 
 interface VrmViewportProps {
   selectedFile: File | null;
+  materialOverrides: AosMaterialOverride[];
+  textureAssets: TextureAssetInput[];
   command: 'fit' | 'reset' | null;
   commandId: number;
   onLoadStart: () => void;
@@ -10,10 +18,13 @@ interface VrmViewportProps {
   onLoaded: (result: VrmLoadResult) => void;
   onError: (message: string) => void;
   onStats: (stats: VrmStageStats) => void;
+  onMaterialError: (message: string) => void;
 }
 
 export function VrmViewport({
   selectedFile,
+  materialOverrides,
+  textureAssets,
   command,
   commandId,
   onLoadStart,
@@ -21,9 +32,16 @@ export function VrmViewport({
   onLoaded,
   onError,
   onStats,
+  onMaterialError,
 }: VrmViewportProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<VrmStage | null>(null);
+  const [modelRevision, setModelRevision] = useState(0);
+
+  const textureAssetMap = useMemo(
+    () => new Map(textureAssets.map((asset) => [asset.id, asset.file])),
+    [textureAssets],
+  );
 
   useEffect(() => {
     const host = hostRef.current;
@@ -49,6 +67,7 @@ export function VrmViewport({
     }
     if (!selectedFile) {
       stage.clearModel();
+      setModelRevision((value) => value + 1);
       return;
     }
 
@@ -64,6 +83,7 @@ export function VrmViewport({
       .then((result) => {
         if (!cancelled) {
           onLoaded(result);
+          setModelRevision((value) => value + 1);
         }
       })
       .catch((error: unknown) => {
@@ -78,6 +98,29 @@ export function VrmViewport({
       cancelled = true;
     };
   }, [selectedFile, onError, onLoadStart, onLoaded, onProgress]);
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage || !selectedFile || modelRevision === 0) {
+      return;
+    }
+
+    let cancelled = false;
+    void stage
+      .applyMaterialOverrides(
+        materialOverrides,
+        (assetId) => textureAssetMap.get(assetId) ?? null,
+      )
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          onMaterialError(error instanceof Error ? error.message : 'マテリアルの更新に失敗しました。');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [materialOverrides, modelRevision, onMaterialError, selectedFile, textureAssetMap]);
 
   useEffect(() => {
     const stage = stageRef.current;

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AosAssetKind,
+  AosMaterialOverride,
   AosProjectManifest,
   AosRecentProject,
   HydratedProjectPayload,
@@ -11,7 +12,7 @@ import {
   APP_VERSION,
   createProjectManifest,
 } from '@ai-outfit-studio/common';
-import type { VrmLoadResult, VrmStageStats } from '@ai-outfit-studio/vrm-engine';
+import type { VrmLoadResult, VrmMaterialInfo, VrmStageStats } from '@ai-outfit-studio/vrm-engine';
 import { VrmViewport } from './components/VrmViewport';
 import {
   disposeRuntimeAsset,
@@ -62,6 +63,9 @@ export function App() {
   const [avatar, setAvatar] = useState<RuntimeAsset | null>(null);
   const [references, setReferences] = useState<RuntimeAsset[]>([]);
   const [templates, setTemplates] = useState<RuntimeAsset[]>([]);
+  const [materials, setMaterials] = useState<VrmMaterialInfo[]>([]);
+  const [selectedMaterialKey, setSelectedMaterialKey] = useState<string | null>(null);
+  const [materialOverrides, setMaterialOverrides] = useState<AosMaterialOverride[]>([]);
   const [selectedItem, setSelectedItem] = useState<SelectedItem>({ kind: 'project' });
 
   const [loadState, setLoadState] = useState<LoadState>('idle');
@@ -115,6 +119,9 @@ export function App() {
       setAvatar(next);
       setSelectedItem({ kind: 'avatar', id: next.meta.id });
       setLoadResult(null);
+      setMaterials([]);
+      setSelectedMaterialKey(null);
+      setMaterialOverrides([]);
       setErrorMessage(null);
       setIsDirty(true);
       return;
@@ -164,6 +171,9 @@ export function App() {
         setAvatar(next);
         setSelectedItem({ kind: 'avatar', id: next.meta.id });
         setLoadResult(null);
+        setMaterials([]);
+        setSelectedMaterialKey(null);
+        setMaterialOverrides([]);
         setErrorMessage(null);
         setIsDirty(true);
         return;
@@ -200,7 +210,8 @@ export function App() {
       references: references.map((asset) => asset.meta),
       templates: templates.map((asset) => asset.meta),
     },
-  }), [avatar, project, references, templates]);
+    materialOverrides,
+  }), [avatar, materialOverrides, project, references, templates]);
 
   const confirmDiscard = useCallback(async (): Promise<boolean> => {
     if (!isDirty) return true;
@@ -217,6 +228,9 @@ export function App() {
     setAvatar(null);
     setReferences([]);
     setTemplates([]);
+    setMaterials([]);
+    setSelectedMaterialKey(null);
+    setMaterialOverrides([]);
     setLoadState('idle');
     setProgress(null);
     setLoadResult(null);
@@ -258,6 +272,9 @@ export function App() {
     setAvatar(nextAvatar);
     setReferences(nextReferences);
     setTemplates(nextTemplates);
+    setMaterialOverrides(payload.manifest.materialOverrides ?? []);
+    setMaterials([]);
+    setSelectedMaterialKey(null);
     setSelectedItem(nextAvatar ? { kind: 'avatar', id: nextAvatar.meta.id } : { kind: 'project' });
     setIsDirty(false);
 
@@ -334,6 +351,9 @@ export function App() {
       setAvatar(null);
       setLoadState('idle');
       setLoadResult(null);
+      setMaterials([]);
+      setSelectedMaterialKey(null);
+      setMaterialOverrides([]);
       setErrorMessage(null);
       setStats(initialStats);
     } else if (kind === 'reference') {
@@ -348,6 +368,9 @@ export function App() {
         disposeRuntimeAsset(removed);
         return current.filter((asset) => asset.meta.id !== id);
       });
+      setMaterialOverrides((current) => current.map((override) =>
+        override.textureAssetId === id ? { ...override, textureAssetId: null } : override,
+      ));
     }
     setSelectedItem({ kind: 'project' });
     setIsDirty(true);
@@ -361,6 +384,10 @@ export function App() {
   const handleProgress = useCallback((value: number | null) => setProgress(value), []);
   const handleLoaded = useCallback((result: VrmLoadResult) => {
     setLoadResult(result);
+    setMaterials(result.materials);
+    setSelectedMaterialKey((current) => current && result.materials.some((material) => material.key === current)
+      ? current
+      : result.materials[0]?.key ?? null);
     setLoadState('ready');
     setProgress(1);
   }, []);
@@ -370,6 +397,9 @@ export function App() {
     setProgress(null);
   }, []);
   const handleStats = useCallback((nextStats: VrmStageStats) => setStats(nextStats), []);
+  const handleMaterialError = useCallback((message: string) => {
+    showNotice({ tone: 'error', message });
+  }, [showNotice]);
 
   useEffect(() => {
     void window.aosDesktop?.getAppVersion().then(setElectronVersion);
@@ -442,6 +472,61 @@ export function App() {
   }, [avatar, references, selectedItem, templates]);
 
   const activePreview = selectedAsset?.previewUrl ? selectedAsset : null;
+  const selectedMaterial = useMemo(
+    () => materials.find((material) => material.key === selectedMaterialKey) ?? null,
+    [materials, selectedMaterialKey],
+  );
+  const selectedMaterialOverride = useMemo(
+    () => materialOverrides.find((override) => override.materialKey === selectedMaterialKey) ?? null,
+    [materialOverrides, selectedMaterialKey],
+  );
+  const selectedMaterialSettings = useMemo(() => selectedMaterial ? {
+    textureAssetId: selectedMaterialOverride?.textureAssetId ?? null,
+    color: selectedMaterialOverride?.color ?? selectedMaterial.color,
+    opacity: selectedMaterialOverride?.opacity ?? selectedMaterial.opacity,
+    repeatX: selectedMaterialOverride?.repeatX ?? 1,
+    repeatY: selectedMaterialOverride?.repeatY ?? 1,
+    offsetX: selectedMaterialOverride?.offsetX ?? 0,
+    offsetY: selectedMaterialOverride?.offsetY ?? 0,
+  } : null, [selectedMaterial, selectedMaterialOverride]);
+  const textureAssetInputs = useMemo(
+    () => templates.map((asset) => ({ id: asset.meta.id, file: asset.file })),
+    [templates],
+  );
+
+  const updateSelectedMaterial = useCallback((patch: Partial<AosMaterialOverride>) => {
+    if (!selectedMaterial) return;
+    setMaterialOverrides((current) => {
+      const index = current.findIndex((override) => override.materialKey === selectedMaterial.key);
+      const existing = index >= 0 ? current[index]! : {
+        materialKey: selectedMaterial.key,
+        materialName: selectedMaterial.name,
+        textureAssetId: null,
+        color: selectedMaterial.color,
+        opacity: selectedMaterial.opacity,
+        repeatX: 1,
+        repeatY: 1,
+        offsetX: 0,
+        offsetY: 0,
+      };
+      const nextOverride: AosMaterialOverride = { ...existing, ...patch };
+      if (index < 0) return [...current, nextOverride];
+      return current.map((override, overrideIndex) => overrideIndex === index ? nextOverride : override);
+    });
+    setIsDirty(true);
+  }, [selectedMaterial]);
+
+  const resetSelectedMaterial = useCallback(() => {
+    if (!selectedMaterialKey) return;
+    setMaterialOverrides((current) => current.filter((override) => override.materialKey !== selectedMaterialKey));
+    setIsDirty(true);
+  }, [selectedMaterialKey]);
+
+  const resetAllMaterials = useCallback(() => {
+    if (materialOverrides.length === 0) return;
+    setMaterialOverrides([]);
+    setIsDirty(true);
+  }, [materialOverrides.length]);
 
   return (
     <div className="app-shell" ref={shellRef}>
@@ -480,7 +565,7 @@ export function App() {
 
       <aside className="sidebar left-sidebar">
         <section className="panel-section project-actions">
-          <div className="section-heading"><span>PROJECT</span><small>Asset Foundation</small></div>
+          <div className="section-heading"><span>PROJECT</span><small>Material Preview</small></div>
           <div className="button-grid">
             <button className="secondary-button" type="button" onClick={() => void newProject()}>新規 <kbd>Ctrl+N</kbd></button>
             <button className="secondary-button" type="button" onClick={() => void openProject()}>開く <kbd>Ctrl+O</kbd></button>
@@ -550,6 +635,8 @@ export function App() {
       <main className="workspace">
         <VrmViewport
           selectedFile={avatar?.file ?? null}
+          materialOverrides={materialOverrides}
+          textureAssets={textureAssetInputs}
           command={cameraCommand}
           commandId={cameraCommandId}
           onLoadStart={handleLoadStart}
@@ -557,6 +644,7 @@ export function App() {
           onLoaded={handleLoaded}
           onError={handleError}
           onStats={handleStats}
+          onMaterialError={handleMaterialError}
         />
 
         <div className="viewport-toolbar">
@@ -601,6 +689,8 @@ export function App() {
               <dt>Avatar</dt><dd>{avatar ? '1' : '0'}</dd>
               <dt>References</dt><dd>{references.length}</dd>
               <dt>Templates</dt><dd>{templates.length}</dd>
+              <dt>Materials</dt><dd>{materials.length}</dd>
+              <dt>Overrides</dt><dd>{materialOverrides.length}</dd>
               <dt>Schema</dt><dd>v{project.schemaVersion}</dd>
             </dl>
           ) : selectedAsset ? (
@@ -611,11 +701,91 @@ export function App() {
                 <dt>Type</dt><dd>{selectedAsset.meta.kind}</dd>
                 <dt>Size</dt><dd>{formatBytes(selectedAsset.meta.size)}</dd>
                 <dt>Source</dt><dd title={selectedAsset.meta.sourcePath}>{selectedAsset.meta.sourcePath || 'Browser import'}</dd>
-                {selectedItem.kind === 'avatar' && <><dt>Format</dt><dd>{loadResult?.specVersion ?? '—'}</dd><dt>Height</dt><dd>{loadResult ? `${loadResult.height.toFixed(3)} m` : '—'}</dd><dt>Objects</dt><dd>{loadResult?.objectCount ?? '—'}</dd></>}
+                {selectedItem.kind === 'avatar' && <><dt>Format</dt><dd>{loadResult?.specVersion ?? '—'}</dd><dt>Height</dt><dd>{loadResult ? `${loadResult.height.toFixed(3)} m` : '—'}</dd><dt>Objects</dt><dd>{loadResult?.objectCount ?? '—'}</dd><dt>Materials</dt><dd>{materials.length || '—'}</dd></>}
               </dl>
               <button className="danger-button" type="button" onClick={() => removeAsset(selectedAsset.meta.kind, selectedAsset.meta.id)}>プロジェクトから削除</button>
             </>
           ) : <p className="muted-copy">アセットが見つかりません。</p>}
+        </section>
+
+        <section className="panel-section material-panel">
+          <div className="section-heading"><span>MATERIALS</span><small>{materials.length}</small></div>
+          {materials.length === 0 ? (
+            <p className="muted-copy">VRMを読み込むとマテリアル一覧が表示されます。</p>
+          ) : (
+            <>
+              <div className="material-list" role="listbox" aria-label="VRMマテリアル一覧">
+                {materials.map((material) => {
+                  const override = materialOverrides.find((item) => item.materialKey === material.key);
+                  return (
+                    <button
+                      type="button"
+                      key={material.key}
+                      className={selectedMaterialKey === material.key ? 'active' : ''}
+                      onClick={() => setSelectedMaterialKey(material.key)}
+                      title={material.name}
+                    >
+                      <span className="material-swatch" style={{ background: override?.color ?? material.color }} />
+                      <span><strong>{material.name}</strong><small>{material.type} · {material.meshCount} mesh{material.meshCount === 1 ? '' : 'es'}</small></span>
+                      {override && <b>EDIT</b>}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {selectedMaterial && selectedMaterialSettings && (
+                <div className="material-editor">
+                  <dl className="material-summary">
+                    <dt>Material</dt><dd title={selectedMaterial.name}>{selectedMaterial.name}</dd>
+                    <dt>Original map</dt><dd>{selectedMaterial.hasBaseColorTexture ? 'あり' : 'なし'}</dd>
+                  </dl>
+
+                  <label className="field-label">
+                    <span>プレビューテクスチャ</span>
+                    <select
+                      value={selectedMaterialSettings.textureAssetId ?? ''}
+                      onChange={(event) => {
+                        const textureAssetId = event.target.value || null;
+                        updateSelectedMaterial({
+                          textureAssetId,
+                          color: textureAssetId && !selectedMaterialSettings.textureAssetId
+                            ? '#ffffff'
+                            : selectedMaterialSettings.color,
+                        });
+                      }}
+                    >
+                      <option value="">元のテクスチャ</option>
+                      {templates.map((asset) => <option key={asset.meta.id} value={asset.meta.id}>{asset.meta.name}</option>)}
+                    </select>
+                  </label>
+                  {templates.length === 0 && <p className="field-help">先にVRoidテンプレート画像を追加してください。</p>}
+
+                  <div className="material-control-row">
+                    <label className="field-label compact-field">
+                      <span>色</span>
+                      <input type="color" value={selectedMaterialSettings.color} onChange={(event) => updateSelectedMaterial({ color: event.target.value })} />
+                    </label>
+                    <label className="field-label opacity-field">
+                      <span>不透明度 <b>{Math.round(selectedMaterialSettings.opacity * 100)}%</b></span>
+                      <input type="range" min="0" max="1" step="0.01" value={selectedMaterialSettings.opacity} onChange={(event) => updateSelectedMaterial({ opacity: Number(event.target.value) })} />
+                    </label>
+                  </div>
+
+                  <div className="uv-transform-grid">
+                    <label><span>Repeat X</span><input type="number" min="0.01" max="20" step="0.05" value={selectedMaterialSettings.repeatX} onChange={(event) => updateSelectedMaterial({ repeatX: Number(event.target.value) || 0.01 })} /></label>
+                    <label><span>Repeat Y</span><input type="number" min="0.01" max="20" step="0.05" value={selectedMaterialSettings.repeatY} onChange={(event) => updateSelectedMaterial({ repeatY: Number(event.target.value) || 0.01 })} /></label>
+                    <label><span>Offset X</span><input type="number" min="-10" max="10" step="0.01" value={selectedMaterialSettings.offsetX} onChange={(event) => updateSelectedMaterial({ offsetX: Number(event.target.value) || 0 })} /></label>
+                    <label><span>Offset Y</span><input type="number" min="-10" max="10" step="0.01" value={selectedMaterialSettings.offsetY} onChange={(event) => updateSelectedMaterial({ offsetY: Number(event.target.value) || 0 })} /></label>
+                  </div>
+
+                  <div className="material-actions">
+                    <button className="secondary-button" type="button" disabled={!selectedMaterialOverride} onClick={resetSelectedMaterial}>選択を元に戻す</button>
+                    <button className="danger-button" type="button" disabled={materialOverrides.length === 0} onClick={resetAllMaterials}>全て元に戻す</button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
         </section>
 
         <section className="panel-section debug-panel">

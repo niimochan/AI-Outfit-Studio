@@ -2,12 +2,24 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin, VRMUtils, type VRM } from '@pixiv/three-vrm';
+import type { AosMaterialOverride } from '@ai-outfit-studio/common';
+
+export interface VrmMaterialInfo {
+  key: string;
+  name: string;
+  type: string;
+  meshCount: number;
+  hasBaseColorTexture: boolean;
+  color: string;
+  opacity: number;
+}
 
 export interface VrmLoadResult {
   fileName: string;
   specVersion: string;
   height: number;
   objectCount: number;
+  materials: VrmMaterialInfo[];
 }
 
 export interface VrmStageStats {
@@ -22,6 +34,30 @@ export interface VrmStageOptions {
   onStats?: (stats: VrmStageStats) => void;
 }
 
+interface TextureCapableMaterial extends THREE.Material {
+  map?: THREE.Texture | null;
+  color?: THREE.Color;
+}
+
+interface MaterialSnapshot {
+  map: THREE.Texture | null;
+  color: THREE.Color | null;
+  opacity: number;
+  transparent: boolean;
+  alphaTest: number;
+  depthWrite: boolean;
+}
+
+interface MaterialEntry {
+  key: string;
+  material: TextureCapableMaterial;
+  meshNames: Set<string>;
+  original: MaterialSnapshot;
+  appliedTexture: THREE.Texture | null;
+  appliedTextureToken: string | null;
+  textureGeneration: number;
+}
+
 export class VrmStage {
   private readonly host: HTMLElement;
   private readonly scene: THREE.Scene;
@@ -29,6 +65,7 @@ export class VrmStage {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly controls: OrbitControls;
   private readonly loader: GLTFLoader;
+  private readonly textureLoader = new THREE.TextureLoader();
   private readonly clock = new THREE.Clock();
   private readonly resizeObserver: ResizeObserver;
   private readonly options: VrmStageOptions;
@@ -37,6 +74,7 @@ export class VrmStage {
 
   private currentVrm: VRM | null = null;
   private currentObjectUrl: string | null = null;
+  private readonly materials = new Map<string, MaterialEntry>();
   private animationFrameId = 0;
   private disposed = false;
   private frameCounter = 0;
@@ -134,6 +172,7 @@ export class VrmStage {
 
       this.currentVrm = vrm;
       this.scene.add(vrm.scene);
+      this.collectMaterials(vrm.scene);
       this.fitCameraToModel();
       onProgress?.(1);
 
@@ -152,6 +191,7 @@ export class VrmStage {
         specVersion,
         height: size.y,
         objectCount,
+        materials: this.getMaterialInfo(),
       };
     } catch (error) {
       if (generation === this.loadGeneration) {
@@ -160,6 +200,36 @@ export class VrmStage {
         URL.revokeObjectURL(objectUrl);
       }
       throw error;
+    }
+  }
+
+  async applyMaterialOverrides(
+    overrides: AosMaterialOverride[],
+    resolveTexture: (assetId: string) => File | null,
+  ): Promise<void> {
+    if (!this.currentVrm) {
+      return;
+    }
+
+    const byKey = new Map(overrides.map((override) => [override.materialKey, override]));
+    const tasks: Promise<void>[] = [];
+
+    for (const [key, entry] of this.materials) {
+      const override = byKey.get(key);
+      if (!override) {
+        this.restoreMaterialEntry(entry);
+        continue;
+      }
+      const textureFile = override.textureAssetId ? resolveTexture(override.textureAssetId) : null;
+      tasks.push(this.applyMaterialOverride(entry, override, textureFile));
+    }
+
+    await Promise.all(tasks);
+  }
+
+  restoreAllMaterials(): void {
+    for (const entry of this.materials.values()) {
+      this.restoreMaterialEntry(entry);
     }
   }
 
@@ -217,6 +287,154 @@ export class VrmStage {
     this.renderer.domElement.remove();
   }
 
+  private collectMaterials(root: THREE.Object3D): void {
+    this.materials.clear();
+    const materialToKey = new Map<THREE.Material, string>();
+    let materialIndex = 0;
+
+    root.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.material) {
+        return;
+      }
+
+      const meshMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      for (const rawMaterial of meshMaterials) {
+        const material = rawMaterial as TextureCapableMaterial;
+        let key = materialToKey.get(material);
+        if (!key) {
+          key = `material-${String(materialIndex).padStart(3, '0')}`;
+          materialIndex += 1;
+          materialToKey.set(material, key);
+          this.materials.set(key, {
+            key,
+            material,
+            meshNames: new Set<string>(),
+            original: {
+              map: material.map ?? null,
+              color: material.color?.clone() ?? null,
+              opacity: material.opacity,
+              transparent: material.transparent,
+              alphaTest: material.alphaTest,
+              depthWrite: material.depthWrite,
+            },
+            appliedTexture: null,
+            appliedTextureToken: null,
+            textureGeneration: 0,
+          });
+        }
+        this.materials.get(key)?.meshNames.add(mesh.name || 'Unnamed Mesh');
+      }
+    });
+  }
+
+  private getMaterialInfo(): VrmMaterialInfo[] {
+    return Array.from(this.materials.values()).map((entry) => ({
+      key: entry.key,
+      name: entry.material.name || entry.key,
+      type: entry.material.type,
+      meshCount: entry.meshNames.size,
+      hasBaseColorTexture: Boolean(entry.original.map),
+      color: entry.original.color ? `#${entry.original.color.getHexString()}` : '#ffffff',
+      opacity: entry.original.opacity,
+    }));
+  }
+
+  private async applyMaterialOverride(
+    entry: MaterialEntry,
+    override: AosMaterialOverride,
+    textureFile: File | null,
+  ): Promise<void> {
+    const material = entry.material;
+    const color = material.color;
+    if (color) {
+      try {
+        color.set(override.color);
+      } catch {
+        color.copy(entry.original.color ?? new THREE.Color(0xffffff));
+      }
+    }
+
+    material.opacity = THREE.MathUtils.clamp(override.opacity, 0, 1);
+    material.transparent = entry.original.transparent || material.opacity < 0.999 || Boolean(textureFile);
+    material.depthWrite = material.opacity >= 0.999 ? entry.original.depthWrite : false;
+    material.alphaTest = entry.original.alphaTest;
+
+    if (!override.textureAssetId || !textureFile || !('map' in material)) {
+      this.releaseAppliedTexture(entry);
+      material.map = entry.original.map;
+      material.needsUpdate = true;
+      return;
+    }
+
+    const textureToken = `${override.textureAssetId}:${textureFile.size}:${textureFile.lastModified}`;
+    if (entry.appliedTextureToken !== textureToken || !entry.appliedTexture) {
+      const generation = ++entry.textureGeneration;
+      const objectUrl = URL.createObjectURL(textureFile);
+      let nextTexture: THREE.Texture | null = null;
+      try {
+        nextTexture = await this.textureLoader.loadAsync(objectUrl);
+      } finally {
+        URL.revokeObjectURL(objectUrl);
+      }
+
+      if (!nextTexture) {
+        throw new Error('テクスチャ画像を読み込めませんでした。');
+      }
+      if (this.disposed || generation !== entry.textureGeneration || !this.materials.has(entry.key)) {
+        nextTexture.dispose();
+        return;
+      }
+
+      this.releaseAppliedTexture(entry);
+      nextTexture.colorSpace = THREE.SRGBColorSpace;
+      nextTexture.flipY = false;
+      nextTexture.wrapS = THREE.RepeatWrapping;
+      nextTexture.wrapT = THREE.RepeatWrapping;
+      nextTexture.center.set(0.5, 0.5);
+      entry.appliedTexture = nextTexture;
+      entry.appliedTextureToken = textureToken;
+      material.map = nextTexture;
+    }
+
+    const texture = entry.appliedTexture;
+    if (texture) {
+      texture.repeat.set(
+        Math.max(0.01, override.repeatX),
+        Math.max(0.01, override.repeatY),
+      );
+      texture.offset.set(override.offsetX, override.offsetY);
+      texture.needsUpdate = true;
+      material.map = texture;
+    }
+    material.needsUpdate = true;
+  }
+
+  private restoreMaterialEntry(entry: MaterialEntry): void {
+    entry.textureGeneration += 1;
+    const { material, original } = entry;
+    this.releaseAppliedTexture(entry);
+    if ('map' in material) {
+      material.map = original.map;
+    }
+    if (material.color && original.color) {
+      material.color.copy(original.color);
+    }
+    material.opacity = original.opacity;
+    material.transparent = original.transparent;
+    material.alphaTest = original.alphaTest;
+    material.depthWrite = original.depthWrite;
+    material.needsUpdate = true;
+  }
+
+  private releaseAppliedTexture(entry: MaterialEntry): void {
+    if (entry.appliedTexture) {
+      entry.appliedTexture.dispose();
+      entry.appliedTexture = null;
+      entry.appliedTextureToken = null;
+    }
+  }
+
   private addEnvironment(): void {
     const hemisphere = new THREE.HemisphereLight(0xcfe7ff, 0x26313d, 1.25);
     this.scene.add(hemisphere);
@@ -262,6 +480,14 @@ export class VrmStage {
   }
 
   private clearCurrentModel(): void {
+    for (const entry of this.materials.values()) {
+      if ('map' in entry.material) {
+        entry.material.map = entry.original.map;
+      }
+      this.releaseAppliedTexture(entry);
+    }
+    this.materials.clear();
+
     if (this.currentVrm) {
       this.scene.remove(this.currentVrm.scene);
       VRMUtils.deepDispose(this.currentVrm.scene);

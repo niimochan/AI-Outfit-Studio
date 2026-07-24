@@ -1,118 +1,73 @@
-# Architecture — v0.2 Asset & Project Foundation
+# Architecture — v0.3 Material Preview Foundation
 
 ## 目的
 
-実機確認済みのVRM表示基盤を維持しながら、作業を保存・再開できるデスクトップアプリケーションへ発展させます。
+実機確認済みのVRM表示・プロジェクト管理基盤の上に、非破壊のマテリアルプレビュー層を追加します。
 
 ## レイヤー
 
 ```text
 Electron Main Process
-  ├─ Window lifecycle
-  ├─ Application menu
+  ├─ Window lifecycle / menu
   ├─ Native file dialogs
-  ├─ .aos read / write
-  ├─ Recent projects persistence
-  ├─ Linked asset hydration
+  ├─ .aos read / write and Schema migration
+  ├─ Recent projects
   └─ Unsaved-close guard
 
 Preload Bridge
-  ├─ Typed IPC surface
-  ├─ File path resolution
-  └─ Renderer command subscription
+  └─ Typed IPC surface
 
 React Renderer
-  ├─ Project state
-  ├─ Runtime asset state
-  ├─ Asset browser
-  ├─ Reference / template preview
-  ├─ Inspector
-  ├─ Recent projects
+  ├─ Project and runtime asset state
+  ├─ Material override state
+  ├─ Asset browser / Inspector
+  ├─ Material list and controls
   └─ VRM viewport integration
 
 Common Package
   ├─ Application constants
-  ├─ .aos schema types
-  ├─ Asset metadata types
-  └─ Project manifest factory
+  ├─ Schema 2 project types
+  ├─ Asset metadata
+  └─ Material override contract
 
 VRM Engine Package
-  ├─ Three.js scene
-  ├─ GLTFLoader + VRMLoaderPlugin
-  ├─ Camera / OrbitControls
-  ├─ Lighting
-  ├─ Resource lifecycle
-  └─ Runtime metrics
+  ├─ Three.js / three-vrm loading
+  ├─ Unique material discovery
+  ├─ Original material snapshots
+  ├─ Runtime texture loading
+  ├─ Color / opacity / UV transforms
+  ├─ Restore and GPU cleanup
+  └─ Camera, lighting and metrics
 ```
 
-## プロセス境界
+## 非破壊マテリアル処理
 
-### Main processが担当するもの
+1. VRMロード後に各ユニークマテリアルを走査する
+2. 元のMap、Color、Opacity、Transparent、AlphaTest、DepthWriteをスナップショットする
+3. 編集内容は`AosMaterialOverride`としてRenderer stateに保持する
+4. テンプレート画像はObject URL経由でThree.js Textureへ変換する
+5. glTF互換のため`flipY = false`、色空間はsRGBに設定する
+6. 同じ画像のUV・色変更時はTextureを再利用する
+7. 復元時は元スナップショットへ戻す
+8. 差し替え・VRM削除・アプリ終了時に生成Textureを破棄する
 
-- OSファイルダイアログ
-- ローカルファイルの読み書き
-- 最近使ったプロジェクトの永続化
-- 終了時の未保存確認
-- ウィンドウタイトルとメニューバー
+## プロジェクト保存
 
-### Rendererが担当するもの
+マテリアル編集は画像そのものを埋め込まず、テンプレートAsset IDへの参照と数値設定のみ保存します。元画像が見つからない場合は、色・不透明度は適用し、テクスチャは元のMapへフォールバックします。
 
-- プロジェクトとアセットの編集状態
-- VRM表示
-- 画像プレビュー
-- Inspector
-- ユーザー操作と通知
-
-Rendererへ`fs`や`path`を直接公開せず、必要な操作だけをPreload API経由で呼び出します。
-
-## セキュリティ
+## セキュリティ境界
 
 - `nodeIntegration: false`
 - `contextIsolation: true`
 - `sandbox: true`
 - RendererへNode APIを直接公開しない
+- ファイルI/OはMain processへ限定
 - 外部URLはOSブラウザで開く
-- IPCは用途別の明示的なチャンネルに限定
-- `.aos`ロード時に最低限のスキーマ検証を行う
-
-## `.aos`保存フロー
-
-1. Rendererが現在のプロジェクトとアセットメタデータからmanifestを作成
-2. Preload経由でMain processへ送信
-3. Main processが保存先を選択
-4. UTF-8 JSONとして`.aos`を書き出す
-5. 最近使ったプロジェクトを更新
-6. Rendererへ確定したpathとmanifestを返す
-7. 未保存フラグを解除
-
-## `.aos`読込フロー
-
-1. Main processで`.aos`を選択
-2. JSONを読み込みSchema 1を検証
-3. 各`sourcePath`の存在を確認
-4. 存在するVRM・画像をバイト列としてRendererへ返す
-5. Rendererで`File`とObject URLを再構築
-6. VRMビューアと画像プレビューへ反映
-7. 見つからないアセット数を通知
-
-## VRMロード
-
-1. RendererでVRMの`File`を保持
-2. `URL.createObjectURL()`で一時URLを作成
-3. `GLTFLoader`へ`VRMLoaderPlugin`を登録
-4. VRMオブジェクトを抽出
-5. 頂点・スケルトン・モーフを最適化
-6. VRM 0.xの向きを補正
-7. シーンへ追加
-8. BoundingBoxからカメラを自動調整
-9. 差し替え・削除時にGPUリソースとObject URLを破棄
 
 ## 次の分離方針
 
-Version 0.2では実装速度を優先し、プロジェクト状態管理はDesktop appに置いています。機能が安定した段階で以下へ分離します。
-
-- `packages/project-core`: `.aos`検証・マイグレーション・パッケージ化
-- `packages/asset-engine`: 画像・テンプレート・サムネイル管理
-- `packages/texture-engine`: UV固定、レイヤー、マスク、合成
+- `packages/project-core`: スキーマ検証・マイグレーション
+- `packages/texture-engine`: UV固定、レイヤー、マスク、合成、PNG出力
+- `packages/material-engine`: MToonのShade / Rim / Emission管理
 - `packages/plugin-sdk`: AI・出力プラグイン契約
 - `plugins/comfyui`: ComfyUI連携

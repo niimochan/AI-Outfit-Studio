@@ -1,6 +1,6 @@
 export const APP_NAME = 'AI Outfit Studio';
-export const APP_VERSION = '0.2.0';
-export const AOS_PROJECT_SCHEMA_VERSION = 1;
+export const APP_VERSION = '0.3.1';
+export const AOS_PROJECT_SCHEMA_VERSION = 2;
 
 export type AosAssetKind = 'avatar' | 'reference' | 'template';
 
@@ -12,6 +12,18 @@ export interface AosProjectAsset {
   size: number;
   mimeType: string;
   importedAt: string;
+}
+
+export interface AosMaterialOverride {
+  materialKey: string;
+  materialName: string;
+  textureAssetId: string | null;
+  color: string;
+  opacity: number;
+  repeatX: number;
+  repeatY: number;
+  offsetX: number;
+  offsetY: number;
 }
 
 export interface AosProjectManifest {
@@ -26,6 +38,7 @@ export interface AosProjectManifest {
     references: AosProjectAsset[];
     templates: AosProjectAsset[];
   };
+  materialOverrides: AosMaterialOverride[];
 }
 
 export interface AosRecentProject {
@@ -67,5 +80,6 @@ export function createProjectManifest(name = 'Untitled Project'): AosProjectMani
       references: [],
       templates: [],
     },
+    materialOverrides: [],
   };
 }

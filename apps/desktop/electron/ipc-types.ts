@@ -10,8 +10,20 @@ export interface AosProjectAsset {
   importedAt: string;
 }
 
+export interface AosMaterialOverride {
+  materialKey: string;
+  materialName: string;
+  textureAssetId: string | null;
+  color: string;
+  opacity: number;
+  repeatX: number;
+  repeatY: number;
+  offsetX: number;
+  offsetY: number;
+}
+
 export interface AosProjectManifest {
-  schemaVersion: 1;
+  schemaVersion: 2;
   appVersion: string;
   id: string;
   name: string;
@@ -22,6 +34,7 @@ export interface AosProjectManifest {
     references: AosProjectAsset[];
     templates: AosProjectAsset[];
   };
+  materialOverrides: AosMaterialOverride[];
 }
 
 export interface AosRecentProject {

@@ -2,10 +2,10 @@
 setlocal
 cd /d "%~dp0"
 
-call npm install
+call npm.cmd install
 if errorlevel 1 goto :error
 
-call npm run package:win
+call npm.cmd run package:win
 if errorlevel 1 goto :error
 
 echo.

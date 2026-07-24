@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import type {
   AosAssetKind,
+  AosMaterialOverride,
   AosProjectAsset,
   AosProjectManifest,
   AosRecentProject,
@@ -72,14 +73,53 @@ async function touchRecentProject(projectPath: string, manifest: AosProjectManif
   return next;
 }
 
+function normalizeMaterialOverrides(value: unknown): AosMaterialOverride[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') {
+      return [];
+    }
+    const override = entry as Partial<AosMaterialOverride>;
+    if (
+      typeof override.materialKey !== 'string' ||
+      typeof override.materialName !== 'string' ||
+      (override.textureAssetId !== null && typeof override.textureAssetId !== 'string') ||
+      typeof override.color !== 'string'
+    ) {
+      return [];
+    }
+
+    const finite = (number: unknown, fallback: number): number =>
+      typeof number === 'number' && Number.isFinite(number) ? number : fallback;
+
+    return [{
+      materialKey: override.materialKey,
+      materialName: override.materialName,
+      textureAssetId: override.textureAssetId ?? null,
+      color: /^#[0-9a-f]{6}$/i.test(override.color) ? override.color : '#ffffff',
+      opacity: Math.min(1, Math.max(0, finite(override.opacity, 1))),
+      repeatX: Math.max(0.01, finite(override.repeatX, 1)),
+      repeatY: Math.max(0.01, finite(override.repeatY, 1)),
+      offsetX: finite(override.offsetX, 0),
+      offsetY: finite(override.offsetY, 0),
+    }];
+  });
+}
+
 function validateManifest(value: unknown): AosProjectManifest {
   if (!value || typeof value !== 'object') {
     throw new Error('プロジェクトファイルの形式が正しくありません。');
   }
 
-  const manifest = value as Partial<AosProjectManifest>;
+  const manifest = value as Partial<Omit<AosProjectManifest, 'schemaVersion' | 'materialOverrides'>> & {
+    schemaVersion?: number;
+    materialOverrides?: unknown;
+  };
   if (
-    manifest.schemaVersion !== 1 ||
+    (manifest.schemaVersion !== 1 && manifest.schemaVersion !== 2) ||
     typeof manifest.id !== 'string' ||
     typeof manifest.name !== 'string' ||
     typeof manifest.createdAt !== 'string' ||
@@ -91,7 +131,11 @@ function validateManifest(value: unknown): AosProjectManifest {
     throw new Error('未対応または破損した .aos プロジェクトです。');
   }
 
-  return manifest as AosProjectManifest;
+  return {
+    ...(manifest as Omit<AosProjectManifest, 'schemaVersion' | 'materialOverrides'>),
+    schemaVersion: 2,
+    materialOverrides: normalizeMaterialOverrides(manifest.materialOverrides),
+  };
 }
 
 async function hydrateAsset(asset: AosProjectAsset | null, missing: string[]): Promise<NativeFilePayload | null> {
