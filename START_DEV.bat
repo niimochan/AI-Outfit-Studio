@@ -11,12 +11,15 @@ if errorlevel 1 (
 )
 
 echo Installing dependencies...
-call npm install
+call npm.cmd install
 if errorlevel 1 goto :error
 
 echo Starting AI Outfit Studio...
-call npm run dev
+call npm.cmd run dev
 if errorlevel 1 goto :error
+
+echo.
+echo AI Outfit Studio closed normally.
 exit /b 0
 
 :error

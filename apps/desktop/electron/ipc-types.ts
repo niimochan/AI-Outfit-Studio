@@ -1,7 +1,3 @@
-export const APP_NAME = 'AI Outfit Studio';
-export const APP_VERSION = '0.2.0';
-export const AOS_PROJECT_SCHEMA_VERSION = 1;
-
 export type AosAssetKind = 'avatar' | 'reference' | 'template';
 
 export interface AosProjectAsset {
@@ -15,7 +11,7 @@ export interface AosProjectAsset {
 }
 
 export interface AosProjectManifest {
-  schemaVersion: typeof AOS_PROJECT_SCHEMA_VERSION;
+  schemaVersion: 1;
   appVersion: string;
   id: string;
   name: string;
@@ -51,21 +47,4 @@ export interface HydratedProjectPayload {
     templates: NativeFilePayload[];
   };
   missingAssetPaths: string[];
-}
-
-export function createProjectManifest(name = 'Untitled Project'): AosProjectManifest {
-  const now = new Date().toISOString();
-  return {
-    schemaVersion: AOS_PROJECT_SCHEMA_VERSION,
-    appVersion: APP_VERSION,
-    id: globalThis.crypto.randomUUID(),
-    name,
-    createdAt: now,
-    updatedAt: now,
-    assets: {
-      avatar: null,
-      references: [],
-      templates: [],
-    },
-  };
 }

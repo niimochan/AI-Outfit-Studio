@@ -41,6 +41,7 @@ export class VrmStage {
   private disposed = false;
   private frameCounter = 0;
   private statsElapsed = 0;
+  private loadGeneration = 0;
 
   constructor(host: HTMLElement, options: VrmStageOptions = {}) {
     this.host = host;
@@ -98,16 +99,24 @@ export class VrmStage {
       throw new Error('VRMファイルではありません。');
     }
 
+    const generation = ++this.loadGeneration;
     this.clearCurrentModel();
-    this.currentObjectUrl = URL.createObjectURL(file);
+    const objectUrl = URL.createObjectURL(file);
+    this.currentObjectUrl = objectUrl;
 
     try {
-      const gltf = await this.loader.loadAsync(this.currentObjectUrl, (event) => {
+      const gltf = await this.loader.loadAsync(objectUrl, (event) => {
         const ratio = event.total > 0 ? event.loaded / event.total : null;
         onProgress?.(ratio);
       });
 
       const vrm = gltf.userData.vrm as VRM | undefined;
+      if (generation !== this.loadGeneration || this.disposed) {
+        if (vrm) {
+          VRMUtils.deepDispose(vrm.scene);
+        }
+        throw new Error('VRMの読み込みがキャンセルされました。');
+      }
       if (!vrm) {
         throw new Error('VRM拡張を検出できませんでした。ファイルが破損している可能性があります。');
       }
@@ -145,7 +154,11 @@ export class VrmStage {
         objectCount,
       };
     } catch (error) {
-      this.clearCurrentModel();
+      if (generation === this.loadGeneration) {
+        this.clearCurrentModel();
+      } else {
+        URL.revokeObjectURL(objectUrl);
+      }
       throw error;
     }
   }
@@ -175,6 +188,12 @@ export class VrmStage {
     this.controls.update();
   }
 
+  clearModel(): void {
+    this.loadGeneration += 1;
+    this.clearCurrentModel();
+    this.resetCamera();
+  }
+
   resetCamera(): void {
     this.camera.position.copy(this.initialCameraPosition);
     this.controls.target.copy(this.initialTarget);
@@ -189,6 +208,7 @@ export class VrmStage {
       return;
     }
     this.disposed = true;
+    this.loadGeneration += 1;
     cancelAnimationFrame(this.animationFrameId);
     this.resizeObserver.disconnect();
     this.clearCurrentModel();

@@ -1,11 +1,11 @@
 {
   "name": "@ai-outfit-studio/desktop",
-  "version": "0.1.0",
+  "version": "0.2.2",
   "private": true,
   "description": "AI Outfit Studio desktop application",
   "main": "dist-electron/main.js",
   "scripts": {
-    "dev": "concurrently -k -n renderer,electron-build,electron -c auto \"npm:dev:renderer\" \"npm:dev:electron-build\" \"npm:dev:electron\"",
+    "dev": "concurrently -k --success first -n renderer,electron-build,electron -c auto \"npm:dev:renderer\" \"npm:dev:electron-build\" \"npm:dev:electron\"",
     "dev:renderer": "vite --host 127.0.0.1",
     "dev:electron-build": "tsc -p tsconfig.electron.json --watch --preserveWatchOutput",
     "dev:electron": "wait-on tcp:5173 file:dist-electron/main.js && cross-env AOS_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
@@ -17,8 +17,8 @@
     "package:win": "npm run build && electron-builder --win nsis"
   },
   "dependencies": {
-    "@ai-outfit-studio/common": "0.1.0",
-    "@ai-outfit-studio/vrm-engine": "0.1.0",
+    "@ai-outfit-studio/common": "0.2.0",
+    "@ai-outfit-studio/vrm-engine": "0.2.0",
     "@pixiv/three-vrm": "^3.5.5",
     "react": "^19.2.1",
     "react-dom": "^19.2.1",

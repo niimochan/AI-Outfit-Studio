@@ -44,7 +44,11 @@ export function VrmViewport({
 
   useEffect(() => {
     const stage = stageRef.current;
-    if (!stage || !selectedFile) {
+    if (!stage) {
+      return;
+    }
+    if (!selectedFile) {
+      stage.clearModel();
       return;
     }
 
@@ -90,15 +94,12 @@ export function VrmViewport({
 
   const handleDrop = useCallback((event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
-    const file = Array.from(event.dataTransfer.files).find((candidate) =>
-      candidate.name.toLowerCase().endsWith('.vrm'),
-    );
-
-    if (file) {
+    const files = Array.from(event.dataTransfer.files);
+    if (files.length > 0) {
       event.currentTarget.dispatchEvent(
-        new CustomEvent<File>('aos-vrm-drop', {
+        new CustomEvent<File[]>('aos-files-drop', {
           bubbles: true,
-          detail: file,
+          detail: files,
         }),
       );
     }
@@ -114,7 +115,7 @@ export function VrmViewport({
     >
       <div className="viewport-hint">
         <strong>VRM Viewport</strong>
-        <span>VRMファイルを読み込むか、ここへドロップ</span>
+        <span>VRMまたは参考画像をここへドロップ</span>
       </div>
     </div>
   );
