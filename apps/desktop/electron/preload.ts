@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
-import type { AosAssetKind, AosProjectManifest } from './ipc-types';
+import type { AosAssetKind, AosProjectManifest, ComfyUiRunRequest } from './ipc-types';
 
 contextBridge.exposeInMainWorld('aosDesktop', {
   getAppVersion: (): Promise<string> => ipcRenderer.invoke('app:get-version'),
@@ -12,6 +12,9 @@ contextBridge.exposeInMainWorld('aosDesktop', {
   openProject: () => ipcRenderer.invoke('project:open'),
   openProjectPath: (projectPath: string) => ipcRenderer.invoke('project:open-path', projectPath),
   getRecentProjects: () => ipcRenderer.invoke('project:get-recent'),
+  pickWorkflowJson: () => ipcRenderer.invoke('ai:pick-workflow'),
+  testComfyUi: (endpoint: string) => ipcRenderer.invoke('ai:comfy-test', endpoint),
+  runComfyUi: (request: ComfyUiRunRequest) => ipcRenderer.invoke('ai:comfy-run', request),
   confirmDiscardChanges: (): Promise<boolean> => ipcRenderer.invoke('dialog:confirm-discard'),
   setDocumentState: (state: { dirty: boolean; title: string }): Promise<void> =>
     ipcRenderer.invoke('app:set-document-state', state),

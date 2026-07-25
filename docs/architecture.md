@@ -1,8 +1,8 @@
-# Architecture — v0.3 Material Preview Foundation
+# Architecture — v0.5 AI Texture Assist Foundation
 
 ## 目的
 
-実機確認済みのVRM表示・プロジェクト管理基盤の上に、非破壊のマテリアルプレビュー層を追加します。
+実機確認済みのVRM・プロジェクト・マテリアル・2D編集基盤の上に、交換可能なAI連携境界を追加します。
 
 ## レイヤー
 
@@ -12,6 +12,8 @@ Electron Main Process
   ├─ Native file dialogs
   ├─ .aos read / write and Schema migration
   ├─ Recent projects
+  ├─ ComfyUI HTTP connector / queue polling
+  ├─ Generated output storage
   └─ Unsaved-close guard
 
 Preload Bridge
@@ -19,14 +21,16 @@ Preload Bridge
 
 React Renderer
   ├─ Project and runtime asset state
-  ├─ Material override state
+  ├─ Material override and texture document state
+  ├─ Canvas composition and AI mask generation
+  ├─ AI settings / job history
   ├─ Asset browser / Inspector
   ├─ Material list and controls
   └─ VRM viewport integration
 
 Common Package
   ├─ Application constants
-  ├─ Schema 3 project and texture document types
+  ├─ Schema 4 project, texture, AI settings and job types
   ├─ Asset metadata
   └─ Material override contract
 
@@ -71,3 +75,9 @@ VRM Engine Package
 - `packages/material-engine`: MToonのShade / Rim / Emission管理
 - `packages/plugin-sdk`: AI・出力プラグイン契約
 - `plugins/comfyui`: ComfyUI連携
+
+## v0.5 AI Connector boundary
+
+The renderer never talks directly to ComfyUI. Electron main owns network requests, file upload, queue polling, output download, and persistent generated-file storage. The renderer owns canvas composition and mask generation, then sends immutable PNG bytes through IPC.
+
+This preserves the security boundary (`contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`) and keeps external AI providers replaceable behind typed IPC contracts.

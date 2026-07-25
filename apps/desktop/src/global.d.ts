@@ -2,6 +2,9 @@ import type {
   AosAssetKind,
   AosProjectManifest,
   AosRecentProject,
+  ComfyUiConnectionResult,
+  ComfyUiRunRequest,
+  ComfyUiRunResult,
   HydratedProjectPayload,
   NativeFilePayload,
 } from '@ai-outfit-studio/common';
@@ -32,6 +35,9 @@ declare global {
       openProject: () => Promise<HydratedProjectPayload | null>;
       openProjectPath: (projectPath: string) => Promise<HydratedProjectPayload>;
       getRecentProjects: () => Promise<AosRecentProject[]>;
+      pickWorkflowJson: () => Promise<{ path: string; name: string; json: string } | null>;
+      testComfyUi: (endpoint: string) => Promise<ComfyUiConnectionResult>;
+      runComfyUi: (request: ComfyUiRunRequest) => Promise<ComfyUiRunResult>;
       confirmDiscardChanges: () => Promise<boolean>;
       setDocumentState: (state: { dirty: boolean; title: string }) => Promise<void>;
       onAppCommand: (callback: (command: string) => void) => () => void;

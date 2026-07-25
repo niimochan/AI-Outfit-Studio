@@ -1,19 +1,19 @@
-# `.aos` Project Format — Schema 3
+# `.aos` Project Format — Schema 5
 
 ## Status
 
-- Application version: 0.4.0
-- Schema version: 3
+- Application version: 0.5.1
+- Schema version: 5
 - Encoding: UTF-8 JSON
 - Storage model: linked assets
-- Backward compatibility: Schema 1 / 2を自動移行
+- Backward compatibility: Schema 1 / 2 / 3 / 4を自動移行
 
 ## Top-level fields
 
 ```json
 {
-  "schemaVersion": 3,
-  "appVersion": "0.4.0",
+  "schemaVersion": 5,
+  "appVersion": "0.5.1",
   "id": "project-uuid",
   "name": "Akane Outfit Project",
   "createdAt": "2026-07-25T01:00:00.000Z",
@@ -21,12 +21,19 @@
   "assets": {
     "avatar": null,
     "references": [],
-    "templates": []
+    "templates": [],
+    "generated": []
   },
   "materialOverrides": [],
-  "textureDocuments": []
+  "textureDocuments": [],
+  "aiSettings": {},
+  "aiJobs": []
 }
 ```
+
+## Assets
+
+`assets.generated`にはComfyUIから取得してElectronのユーザーデータ領域へ保存した画像へのリンクを記録します。構造は参考画像・テンプレートと同じ`AosProjectAsset`です。
 
 ## Texture document
 
@@ -45,7 +52,7 @@
     {
       "id": "layer-uuid",
       "name": "Reference.png",
-      "sourceAssetId": "reference-asset-uuid",
+      "sourceAssetId": "reference-or-generated-asset-uuid",
       "visible": true,
       "opacity": 1,
       "blendMode": "source-over",
@@ -69,6 +76,59 @@
 - `screen`: スクリーン
 - `overlay`: オーバーレイ
 
+## AI settings
+
+```json
+{
+  "provider": "comfyui",
+  "endpoint": "http://127.0.0.1:8188",
+  "workflowName": "aos-sdxl-inpaint-api-workflow.json",
+  "workflowJson": "{ ... }",
+  "positivePrompt": "high quality VRoid clothing texture",
+  "negativePrompt": "text, watermark",
+  "maskMode": "template-alpha",
+  "mode": "reference-guided",
+  "referenceAssetId": "reference-asset-uuid",
+  "referenceStrength": 0.7,
+  "denoiseStrength": 0.55,
+  "templatePreserve": 0.85,
+  "timeoutSeconds": 300,
+  "autoAddResultLayer": true
+}
+```
+
+`maskMode`は以下のいずれかです。
+
+- `template-alpha`
+- `selected-layer-eraser`
+- `full-canvas`
+
+## AI jobs
+
+```json
+{
+  "id": "job-uuid",
+  "provider": "comfyui",
+  "documentId": "texture-document-uuid",
+  "documentName": "Tops Edit",
+  "status": "completed",
+  "positivePrompt": "...",
+  "negativePrompt": "...",
+  "maskMode": "template-alpha",
+  "mode": "reference-guided",
+  "referenceAssetId": "reference-asset-uuid",
+  "referenceAssetName": "Reference Outfit.jpg",
+  "workflowName": "aos-reference-workflow.json",
+  "createdAt": "2026-07-25T01:30:00.000Z",
+  "completedAt": "2026-07-25T01:31:00.000Z",
+  "promptId": "comfyui-prompt-id",
+  "outputAssetId": "generated-asset-uuid",
+  "error": null
+}
+```
+
+アプリが異常終了し、`running`の履歴が残った場合は、次回読込時に失敗扱いへ正規化します。
+
 ## Virtual texture IDs
 
 Texture Documentの合成結果は、実ファイルではなく次の仮想IDでMaterial Overrideから参照します。
@@ -84,16 +144,18 @@ texture-document:<document-id>
 `materialOverrides`は元VRMを変更せず、アプリ内プレビューへ適用する差分設定です。`textureAssetId`は次のいずれかです。
 
 - `assets.templates`内の画像ID
+- `assets.generated`内の画像ID
 - `texture-document:<document-id>`
 - `null`：元テクスチャ
 
 ## Migration
 
-- Schema 1 → `materialOverrides: []`と`textureDocuments: []`を追加
-- Schema 2 → `textureDocuments: []`を追加
-- 読み込み時にメモリ上でSchema 3へ正規化
-- 元ファイルは開いただけでは変更せず、次回保存時にSchema 3で保存
+- Schema 1 → Material・Texture・AI関連の初期値を追加
+- Schema 2 → Texture・AI関連の初期値を追加
+- Schema 3 → `assets.generated`、`aiSettings`、`aiJobs`を追加
+- 読み込み時にメモリ上でSchema 5へ正規化
+- 元ファイルは開いただけでは変更せず、次回保存時にSchema 5で保存
 
 ## Portability
 
-Schema 3も`sourcePath`に絶対パスを保存するリンク型です。元のVRM・参考画像・テンプレートを移動または削除すると、該当レイヤーやテンプレートを復元できません。
+Schema 5も`sourcePath`に絶対パスを保存するリンク型です。元のVRM・参考画像・テンプレートを移動または削除すると復元できません。AI生成画像はElectronのユーザーデータ領域に保存されるため、別PCへ移動する場合は生成画像もコピーする必要があります。

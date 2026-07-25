@@ -7,6 +7,9 @@ export interface TextureSourceAsset {
   previewUrl: string | null;
 }
 
+export type TextureFitMode = 'contain' | 'cover' | 'stretch' | 'original';
+export type TextureMaskMode = 'template-alpha' | 'selected-layer-eraser' | 'full-canvas';
+
 export interface TextureDocumentOutput {
   id: string;
   documentId: string;
@@ -149,4 +152,93 @@ export async function createDefaultTextureLayer(
     rotation: 0,
     eraserStrokes: [],
   };
+}
+
+
+export async function fitTextureLayer(
+  layer: AosTextureLayer,
+  source: TextureSourceAsset,
+  documentWidth: number,
+  documentHeight: number,
+  mode: TextureFitMode,
+): Promise<AosTextureLayer> {
+  const dimensions = await getImageDimensions(source.file);
+  const widthScale = documentWidth / dimensions.width;
+  const heightScale = documentHeight / dimensions.height;
+  let scaleX = 1;
+  let scaleY = 1;
+  if (mode === 'contain') {
+    const scale = Math.min(widthScale, heightScale);
+    scaleX = scale;
+    scaleY = scale;
+  } else if (mode === 'cover') {
+    const scale = Math.max(widthScale, heightScale);
+    scaleX = scale;
+    scaleY = scale;
+  } else if (mode === 'stretch') {
+    scaleX = widthScale;
+    scaleY = heightScale;
+  }
+  return {
+    ...layer,
+    x: documentWidth / 2,
+    y: documentHeight / 2,
+    scaleX,
+    scaleY,
+    rotation: 0,
+  };
+}
+
+export async function renderTextureMask(
+  document: AosTextureDocument,
+  assets: Map<string, TextureSourceAsset>,
+  mode: TextureMaskMode,
+  selectedLayerId: string | null,
+): Promise<HTMLCanvasElement> {
+  const canvas = window.document.createElement('canvas');
+  canvas.width = Math.min(16384, Math.max(1, Math.round(document.width)));
+  canvas.height = Math.min(16384, Math.max(1, Math.round(document.height)));
+  const context = canvas.getContext('2d', { alpha: false });
+  if (!context) throw new Error('AIマスク用Canvasを初期化できませんでした。');
+  context.fillStyle = '#000000';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  if (mode === 'full-canvas') {
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    return canvas;
+  }
+
+  if (mode === 'selected-layer-eraser') {
+    const layer = document.layers.find((entry) => entry.id === selectedLayerId);
+    if (!layer || layer.eraserStrokes.length === 0) {
+      throw new Error('選択レイヤーに消しゴム領域がありません。消しゴムでAI編集範囲を描いてください。');
+    }
+    context.fillStyle = '#ffffff';
+    for (const stroke of layer.eraserStrokes) {
+      context.beginPath();
+      context.arc(stroke.x, stroke.y, Math.max(1, stroke.radius), 0, Math.PI * 2);
+      context.fill();
+    }
+    return canvas;
+  }
+
+  const template = assets.get(document.templateAssetId);
+  if (!template) throw new Error('テンプレート画像が見つかりません。');
+  const bitmap = await decodeImage(template.file);
+  try {
+    const alphaCanvas = window.document.createElement('canvas');
+    alphaCanvas.width = canvas.width;
+    alphaCanvas.height = canvas.height;
+    const alphaContext = alphaCanvas.getContext('2d', { alpha: true });
+    if (!alphaContext) throw new Error('テンプレートAlphaを取得できませんでした。');
+    alphaContext.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    alphaContext.globalCompositeOperation = 'source-in';
+    alphaContext.fillStyle = '#ffffff';
+    alphaContext.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(alphaCanvas, 0, 0);
+    return canvas;
+  } finally {
+    bitmap.close();
+  }
 }

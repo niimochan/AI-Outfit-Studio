@@ -1,8 +1,8 @@
 export const APP_NAME = 'AI Outfit Studio';
-export const APP_VERSION = '0.4.0';
-export const AOS_PROJECT_SCHEMA_VERSION = 3;
+export const APP_VERSION = '0.5.1';
+export const AOS_PROJECT_SCHEMA_VERSION = 5;
 
-export type AosAssetKind = 'avatar' | 'reference' | 'template';
+export type AosAssetKind = 'avatar' | 'reference' | 'template' | 'generated';
 
 export interface AosProjectAsset {
   id: string;
@@ -63,6 +63,48 @@ export interface AosTextureDocument {
   updatedAt: string;
 }
 
+export type AosAiProvider = 'comfyui';
+export type AosAiMaskMode = 'template-alpha' | 'selected-layer-eraser' | 'full-canvas';
+export type AosAiJobStatus = 'running' | 'completed' | 'failed';
+export type AosAiMode = 'prompt-only' | 'reference-guided' | 'reference-inpaint';
+
+export interface AosAiSettings {
+  provider: AosAiProvider;
+  endpoint: string;
+  workflowName: string;
+  workflowJson: string;
+  positivePrompt: string;
+  negativePrompt: string;
+  maskMode: AosAiMaskMode;
+  mode: AosAiMode;
+  referenceAssetId: string | null;
+  referenceStrength: number;
+  denoiseStrength: number;
+  templatePreserve: number;
+  timeoutSeconds: number;
+  autoAddResultLayer: boolean;
+}
+
+export interface AosAiJob {
+  id: string;
+  provider: AosAiProvider;
+  documentId: string;
+  documentName: string;
+  status: AosAiJobStatus;
+  positivePrompt: string;
+  negativePrompt: string;
+  maskMode: AosAiMaskMode;
+  mode: AosAiMode;
+  referenceAssetId: string | null;
+  referenceAssetName: string | null;
+  workflowName: string;
+  createdAt: string;
+  completedAt: string | null;
+  promptId: string | null;
+  outputAssetId: string | null;
+  error: string | null;
+}
+
 export interface AosProjectManifest {
   schemaVersion: typeof AOS_PROJECT_SCHEMA_VERSION;
   appVersion: string;
@@ -74,9 +116,12 @@ export interface AosProjectManifest {
     avatar: AosProjectAsset | null;
     references: AosProjectAsset[];
     templates: AosProjectAsset[];
+    generated: AosProjectAsset[];
   };
   materialOverrides: AosMaterialOverride[];
   textureDocuments: AosTextureDocument[];
+  aiSettings: AosAiSettings;
+  aiJobs: AosAiJob[];
 }
 
 export interface AosRecentProject {
@@ -100,12 +145,63 @@ export interface HydratedProjectPayload {
     avatar: NativeFilePayload | null;
     references: NativeFilePayload[];
     templates: NativeFilePayload[];
+    generated: NativeFilePayload[];
   };
   missingAssetPaths: string[];
 }
 
+export interface ComfyUiConnectionResult {
+  ok: boolean;
+  message: string;
+  deviceName: string | null;
+  vramTotal: number | null;
+}
+
+export interface ComfyUiRunRequest {
+  projectId: string;
+  documentId: string;
+  endpoint: string;
+  workflowJson: string;
+  positivePrompt: string;
+  negativePrompt: string;
+  inputImage: Uint8Array;
+  maskImage: Uint8Array;
+  referenceImage: Uint8Array | null;
+  mode: AosAiMode;
+  referenceStrength: number;
+  denoiseStrength: number;
+  templatePreserve: number;
+  outputPrefix: string;
+  timeoutSeconds: number;
+}
+
+export interface ComfyUiRunResult {
+  promptId: string;
+  outputNodeId: string;
+  output: NativeFilePayload;
+}
+
 export function textureDocumentAssetId(documentId: string): string {
   return `texture-document:${documentId}`;
+}
+
+export function createDefaultAiSettings(): AosAiSettings {
+  return {
+    provider: 'comfyui',
+    endpoint: 'http://127.0.0.1:8188',
+    workflowName: '',
+    workflowJson: '',
+    positivePrompt: 'high quality VRoid clothing texture, preserve UV layout, seamless garment details',
+    negativePrompt: 'text, watermark, logo, extra objects, broken UV layout, cropped texture',
+    maskMode: 'template-alpha',
+    mode: 'prompt-only',
+    referenceAssetId: null,
+    referenceStrength: 0.7,
+    denoiseStrength: 0.55,
+    templatePreserve: 0.85,
+    timeoutSeconds: 300,
+    autoAddResultLayer: true,
+  };
 }
 
 export function createProjectManifest(name = 'Untitled Project'): AosProjectManifest {
@@ -121,8 +217,11 @@ export function createProjectManifest(name = 'Untitled Project'): AosProjectMani
       avatar: null,
       references: [],
       templates: [],
+      generated: [],
     },
     materialOverrides: [],
     textureDocuments: [],
+    aiSettings: createDefaultAiSettings(),
+    aiJobs: [],
   };
 }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.1
+- Added Sprint A reference-aware AI assist.
+- Added AI mode, reference selection, execution preview, and workflow tokens.
+- Updated project schema to v5.
+
 ## 0.4.0 — Texture Editor Foundation
 
 ### Added
@@ -103,3 +108,15 @@
 - 回転・ズーム・パン
 - カメラフィット・リセット
 - リアルタイム描画統計
+
+## 0.5.0 — AI Texture Assist Foundation
+
+- Added ComfyUI endpoint configuration and connection testing
+- Added ComfyUI API Workflow JSON import
+- Added workflow token replacement and common-node automatic mapping
+- Added template-alpha, selected-layer-eraser, and full-canvas AI mask generation
+- Added queue submission, polling, timeout, output retrieval, and error handling
+- Added persistent AI generated assets and optional automatic result layers
+- Added AI job history and `.aos` Schema 4 persistence
+- Added layer auto-fit modes: contain, cover, stretch, and original size
+- Added Schema 1–3 migration to Schema 4

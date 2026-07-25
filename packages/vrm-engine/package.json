@@ -1,6 +1,6 @@
 {
   "name": "@ai-outfit-studio/vrm-engine",
-  "version": "0.4.0",
+  "version": "0.5.1",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
@@ -13,6 +13,6 @@
     "three": "^0.185.1"
   },
   "dependencies": {
-    "@ai-outfit-studio/common": "0.4.0"
+    "@ai-outfit-studio/common": "0.5.1"
   }
 }

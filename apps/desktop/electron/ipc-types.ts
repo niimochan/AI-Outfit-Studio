@@ -1,4 +1,4 @@
-export type AosAssetKind = 'avatar' | 'reference' | 'template';
+export type AosAssetKind = 'avatar' | 'reference' | 'template' | 'generated';
 
 export interface AosProjectAsset {
   id: string;
@@ -23,14 +23,7 @@ export interface AosMaterialOverride {
 }
 
 export type AosTextureBlendMode = 'source-over' | 'multiply' | 'screen' | 'overlay';
-
-export interface AosTextureEraserStroke {
-  id: string;
-  x: number;
-  y: number;
-  radius: number;
-}
-
+export interface AosTextureEraserStroke { id: string; x: number; y: number; radius: number; }
 export interface AosTextureLayer {
   id: string;
   name: string;
@@ -45,7 +38,6 @@ export interface AosTextureLayer {
   rotation: number;
   eraserStrokes: AosTextureEraserStroke[];
 }
-
 export interface AosTextureDocument {
   id: string;
   name: string;
@@ -59,8 +51,48 @@ export interface AosTextureDocument {
   updatedAt: string;
 }
 
+export type AosAiProvider = 'comfyui';
+export type AosAiMaskMode = 'template-alpha' | 'selected-layer-eraser' | 'full-canvas';
+export type AosAiJobStatus = 'running' | 'completed' | 'failed';
+export type AosAiMode = 'prompt-only' | 'reference-guided' | 'reference-inpaint';
+export interface AosAiSettings {
+  provider: AosAiProvider;
+  endpoint: string;
+  workflowName: string;
+  workflowJson: string;
+  positivePrompt: string;
+  negativePrompt: string;
+  maskMode: AosAiMaskMode;
+  mode: AosAiMode;
+  referenceAssetId: string | null;
+  referenceStrength: number;
+  denoiseStrength: number;
+  templatePreserve: number;
+  timeoutSeconds: number;
+  autoAddResultLayer: boolean;
+}
+export interface AosAiJob {
+  id: string;
+  provider: AosAiProvider;
+  documentId: string;
+  documentName: string;
+  status: AosAiJobStatus;
+  positivePrompt: string;
+  negativePrompt: string;
+  maskMode: AosAiMaskMode;
+  mode: AosAiMode;
+  referenceAssetId: string | null;
+  referenceAssetName: string | null;
+  workflowName: string;
+  createdAt: string;
+  completedAt: string | null;
+  promptId: string | null;
+  outputAssetId: string | null;
+  error: string | null;
+}
+
 export interface AosProjectManifest {
-  schemaVersion: 3;
+  schemaVersion: 5;
   appVersion: string;
   id: string;
   name: string;
@@ -70,25 +102,16 @@ export interface AosProjectManifest {
     avatar: AosProjectAsset | null;
     references: AosProjectAsset[];
     templates: AosProjectAsset[];
+    generated: AosProjectAsset[];
   };
   materialOverrides: AosMaterialOverride[];
   textureDocuments: AosTextureDocument[];
+  aiSettings: AosAiSettings;
+  aiJobs: AosAiJob[];
 }
 
-export interface AosRecentProject {
-  path: string;
-  name: string;
-  updatedAt: string;
-}
-
-export interface NativeFilePayload {
-  path: string;
-  name: string;
-  size: number;
-  mimeType: string;
-  data: Uint8Array;
-}
-
+export interface AosRecentProject { path: string; name: string; updatedAt: string; }
+export interface NativeFilePayload { path: string; name: string; size: number; mimeType: string; data: Uint8Array; }
 export interface HydratedProjectPayload {
   path: string;
   manifest: AosProjectManifest;
@@ -96,6 +119,31 @@ export interface HydratedProjectPayload {
     avatar: NativeFilePayload | null;
     references: NativeFilePayload[];
     templates: NativeFilePayload[];
+    generated: NativeFilePayload[];
   };
   missingAssetPaths: string[];
 }
+export interface ComfyUiConnectionResult {
+  ok: boolean;
+  message: string;
+  deviceName: string | null;
+  vramTotal: number | null;
+}
+export interface ComfyUiRunRequest {
+  projectId: string;
+  documentId: string;
+  endpoint: string;
+  workflowJson: string;
+  positivePrompt: string;
+  negativePrompt: string;
+  inputImage: Uint8Array;
+  maskImage: Uint8Array;
+  referenceImage: Uint8Array | null;
+  mode: AosAiMode;
+  referenceStrength: number;
+  denoiseStrength: number;
+  templatePreserve: number;
+  outputPrefix: string;
+  timeoutSeconds: number;
+}
+export interface ComfyUiRunResult { promptId: string; outputNodeId: string; output: NativeFilePayload; }

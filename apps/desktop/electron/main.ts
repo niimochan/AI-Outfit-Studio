@@ -1,6 +1,9 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
 import type {
   AosAssetKind,
+  AosAiJob,
+  AosAiMaskMode,
+  AosAiSettings,
   AosMaterialOverride,
   AosProjectAsset,
   AosProjectManifest,
@@ -9,6 +12,9 @@ import type {
   AosRecentProject,
   HydratedProjectPayload,
   NativeFilePayload,
+  ComfyUiConnectionResult,
+  ComfyUiRunRequest,
+  ComfyUiRunResult,
 } from './ipc-types';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -172,18 +178,101 @@ function normalizeTextureDocuments(value: unknown): AosTextureDocument[] {
   });
 }
 
+
+function defaultAiSettings(): AosAiSettings {
+  return {
+    provider: 'comfyui',
+    endpoint: 'http://127.0.0.1:8188',
+    workflowName: '',
+    workflowJson: '',
+    positivePrompt: 'high quality VRoid clothing texture, preserve UV layout, seamless garment details',
+    negativePrompt: 'text, watermark, logo, extra objects, broken UV layout, cropped texture',
+    maskMode: 'template-alpha',
+    mode: 'prompt-only',
+    referenceAssetId: null,
+    referenceStrength: 0.7,
+    denoiseStrength: 0.55,
+    templatePreserve: 0.85,
+    timeoutSeconds: 300,
+    autoAddResultLayer: true,
+  };
+}
+
+function normalizeAiSettings(value: unknown): AosAiSettings {
+  const fallback = defaultAiSettings();
+  if (!value || typeof value !== 'object') return fallback;
+  const settings = value as Partial<AosAiSettings>;
+  const maskModes = new Set<AosAiMaskMode>(['template-alpha', 'selected-layer-eraser', 'full-canvas']);
+  const aiModes = new Set(['prompt-only', 'reference-guided', 'reference-inpaint']);
+  const timeout = typeof settings.timeoutSeconds === 'number' && Number.isFinite(settings.timeoutSeconds)
+    ? Math.min(3600, Math.max(30, Math.round(settings.timeoutSeconds)))
+    : fallback.timeoutSeconds;
+  const clampUnit = (value: unknown, nextFallback: number) => typeof value === 'number' && Number.isFinite(value)
+    ? Math.min(1, Math.max(0, value))
+    : nextFallback;
+  return {
+    provider: 'comfyui',
+    endpoint: typeof settings.endpoint === 'string' && settings.endpoint.trim() ? settings.endpoint.trim() : fallback.endpoint,
+    workflowName: typeof settings.workflowName === 'string' ? settings.workflowName : '',
+    workflowJson: typeof settings.workflowJson === 'string' ? settings.workflowJson : '',
+    positivePrompt: typeof settings.positivePrompt === 'string' ? settings.positivePrompt : fallback.positivePrompt,
+    negativePrompt: typeof settings.negativePrompt === 'string' ? settings.negativePrompt : fallback.negativePrompt,
+    maskMode: maskModes.has(settings.maskMode as AosAiMaskMode) ? settings.maskMode as AosAiMaskMode : fallback.maskMode,
+    mode: aiModes.has(settings.mode as string) ? settings.mode as AosAiSettings['mode'] : fallback.mode,
+    referenceAssetId: typeof settings.referenceAssetId === 'string' && settings.referenceAssetId.trim() ? settings.referenceAssetId : null,
+    referenceStrength: clampUnit(settings.referenceStrength, fallback.referenceStrength),
+    denoiseStrength: clampUnit(settings.denoiseStrength, fallback.denoiseStrength),
+    templatePreserve: clampUnit(settings.templatePreserve, fallback.templatePreserve),
+    timeoutSeconds: timeout,
+    autoAddResultLayer: settings.autoAddResultLayer !== false,
+  };
+}
+
+function normalizeAiJobs(value: unknown): AosAiJob[] {
+  if (!Array.isArray(value)) return [];
+  const maskModes = new Set<AosAiMaskMode>(['template-alpha', 'selected-layer-eraser', 'full-canvas']);
+  const aiModes = new Set(['prompt-only', 'reference-guided', 'reference-inpaint']);
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return [];
+    const job = entry as Partial<AosAiJob>;
+    if (typeof job.id !== 'string' || typeof job.documentId !== 'string' || typeof job.documentName !== 'string') return [];
+    const status = job.status === 'completed' || job.status === 'failed' ? job.status : 'failed';
+    return [{
+      id: job.id,
+      provider: 'comfyui' as const,
+      documentId: job.documentId,
+      documentName: job.documentName,
+      status,
+      positivePrompt: typeof job.positivePrompt === 'string' ? job.positivePrompt : '',
+      negativePrompt: typeof job.negativePrompt === 'string' ? job.negativePrompt : '',
+      maskMode: maskModes.has(job.maskMode as AosAiMaskMode) ? job.maskMode as AosAiMaskMode : 'template-alpha',
+      mode: aiModes.has(job.mode as string) ? job.mode as AosAiJob['mode'] : 'prompt-only',
+      referenceAssetId: typeof job.referenceAssetId === 'string' && job.referenceAssetId ? job.referenceAssetId : null,
+      referenceAssetName: typeof job.referenceAssetName === 'string' ? job.referenceAssetName : null,
+      workflowName: typeof job.workflowName === 'string' ? job.workflowName : '',
+      createdAt: typeof job.createdAt === 'string' ? job.createdAt : new Date().toISOString(),
+      completedAt: typeof job.completedAt === 'string' ? job.completedAt : null,
+      promptId: typeof job.promptId === 'string' ? job.promptId : null,
+      outputAssetId: typeof job.outputAssetId === 'string' ? job.outputAssetId : null,
+      error: typeof job.error === 'string' ? job.error : null,
+    }];
+  }).slice(-100);
+}
+
 function validateManifest(value: unknown): AosProjectManifest {
   if (!value || typeof value !== 'object') {
     throw new Error('プロジェクトファイルの形式が正しくありません。');
   }
 
-  const manifest = value as Partial<Omit<AosProjectManifest, 'schemaVersion' | 'materialOverrides' | 'textureDocuments'>> & {
+  const manifest = value as Partial<Omit<AosProjectManifest, 'schemaVersion' | 'materialOverrides' | 'textureDocuments' | 'aiSettings' | 'aiJobs'>> & {
     schemaVersion?: number;
     materialOverrides?: unknown;
     textureDocuments?: unknown;
+    aiSettings?: unknown;
+    aiJobs?: unknown;
   };
   if (
-    (manifest.schemaVersion !== 1 && manifest.schemaVersion !== 2 && manifest.schemaVersion !== 3) ||
+    (manifest.schemaVersion !== 1 && manifest.schemaVersion !== 2 && manifest.schemaVersion !== 3 && manifest.schemaVersion !== 4 && manifest.schemaVersion !== 5) ||
     typeof manifest.id !== 'string' ||
     typeof manifest.name !== 'string' ||
     typeof manifest.createdAt !== 'string' ||
@@ -195,11 +284,20 @@ function validateManifest(value: unknown): AosProjectManifest {
     throw new Error('未対応または破損した .aos プロジェクトです。');
   }
 
+  const assets = manifest.assets as AosProjectManifest['assets'] & { generated?: AosProjectAsset[] };
   return {
-    ...(manifest as Omit<AosProjectManifest, 'schemaVersion' | 'materialOverrides' | 'textureDocuments'>),
-    schemaVersion: 3,
+    ...(manifest as Omit<AosProjectManifest, 'schemaVersion' | 'assets' | 'materialOverrides' | 'textureDocuments' | 'aiSettings' | 'aiJobs'>),
+    schemaVersion: 5,
+    assets: {
+      avatar: assets.avatar ?? null,
+      references: assets.references,
+      templates: assets.templates,
+      generated: Array.isArray(assets.generated) ? assets.generated : [],
+    },
     materialOverrides: normalizeMaterialOverrides(manifest.materialOverrides),
     textureDocuments: normalizeTextureDocuments(manifest.textureDocuments),
+    aiSettings: normalizeAiSettings(manifest.aiSettings),
+    aiJobs: normalizeAiJobs(manifest.aiJobs),
   };
 }
 
@@ -224,10 +322,11 @@ async function openProjectFromPath(projectPath: string): Promise<HydratedProject
   const manifest = validateManifest(JSON.parse(raw));
   const missingAssetPaths: string[] = [];
 
-  const [avatar, references, templates] = await Promise.all([
+  const [avatar, references, templates, generated] = await Promise.all([
     hydrateAsset(manifest.assets.avatar, missingAssetPaths),
     hydrateAssets(manifest.assets.references, missingAssetPaths),
     hydrateAssets(manifest.assets.templates, missingAssetPaths),
+    hydrateAssets(manifest.assets.generated, missingAssetPaths),
   ]);
 
   await touchRecentProject(projectPath, manifest);
@@ -235,9 +334,274 @@ async function openProjectFromPath(projectPath: string): Promise<HydratedProject
   return {
     path: projectPath,
     manifest,
-    assets: { avatar, references, templates },
+    assets: { avatar, references, templates, generated },
     missingAssetPaths,
   };
+}
+
+
+function normalizeEndpoint(endpoint: string): string {
+  const trimmed = endpoint.trim().replace(/\/+$/, '');
+  const url = new URL(trimmed);
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('ComfyUIの接続先は http:// または https:// で指定してください。');
+  }
+  return url.toString().replace(/\/$/, '');
+}
+
+async function fetchWithTimeout(input: string, init: RequestInit = {}, timeoutMs = 15000): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('ComfyUIへの接続がタイムアウトしました。');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function humanBytes(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return '不明';
+  const gib = value / 1024 / 1024 / 1024;
+  return `${gib.toFixed(1)} GB`;
+}
+
+async function testComfyUiConnection(endpoint: string): Promise<ComfyUiConnectionResult> {
+  try {
+    const base = normalizeEndpoint(endpoint);
+    const response = await fetchWithTimeout(`${base}/system_stats`, {}, 10000);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json() as {
+      system?: { os?: string };
+      devices?: Array<{ name?: string; vram_total?: number }>;
+    };
+    const device = payload.devices?.[0];
+    const deviceName = typeof device?.name === 'string' ? device.name : null;
+    const vramTotal = typeof device?.vram_total === 'number' ? device.vram_total : null;
+    return {
+      ok: true,
+      message: `接続成功${deviceName ? `：${deviceName}` : ''}${vramTotal ? ` / VRAM ${humanBytes(vramTotal)}` : ''}`,
+      deviceName,
+      vramTotal,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : 'ComfyUIへ接続できませんでした。',
+      deviceName: null,
+      vramTotal: null,
+    };
+  }
+}
+
+function replaceWorkflowTokens(value: unknown, tokens: Record<string, string>): unknown {
+  if (value === '__AOS_SEED__') return Number(tokens.__AOS_SEED__);
+  if (typeof value === 'string') {
+    let next = value;
+    for (const [token, replacement] of Object.entries(tokens)) {
+      next = next.split(token).join(replacement);
+    }
+    return next;
+  }
+  if (Array.isArray(value)) return value.map((entry) => replaceWorkflowTokens(entry, tokens));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, replaceWorkflowTokens(entry, tokens)]));
+  }
+  return value;
+}
+
+
+function autoInjectCommonComfyNodes(graph: unknown, tokens: Record<string, string>): void {
+  if (!graph || typeof graph !== 'object' || Array.isArray(graph)) return;
+  const nodes = Object.values(graph as Record<string, unknown>).filter((node): node is Record<string, unknown> => Boolean(node) && typeof node === 'object' && !Array.isArray(node));
+  const imageNodes: Array<{ node: Record<string, unknown>; title: string }> = [];
+  const textNodes: Array<{ node: Record<string, unknown>; title: string }> = [];
+
+  for (const node of nodes) {
+    const classType = typeof node.class_type === 'string' ? node.class_type : '';
+    const meta = node._meta && typeof node._meta === 'object' ? node._meta as { title?: unknown } : null;
+    const title = typeof meta?.title === 'string' ? meta.title.toLowerCase() : '';
+    if ((classType === 'LoadImage' || classType === 'LoadImageMask') && node.inputs && typeof node.inputs === 'object') imageNodes.push({ node, title });
+    if (classType === 'CLIPTextEncode' && node.inputs && typeof node.inputs === 'object') textNodes.push({ node, title });
+    if ((classType === 'SaveImage' || classType === 'SaveAnimatedWEBP') && node.inputs && typeof node.inputs === 'object') {
+      (node.inputs as Record<string, unknown>).filename_prefix = tokens.__AOS_OUTPUT_PREFIX__;
+    }
+    if ((classType === 'KSampler' || classType === 'KSamplerAdvanced') && node.inputs && typeof node.inputs === 'object') {
+      const inputs = node.inputs as Record<string, unknown>;
+      if ('denoise' in inputs) inputs.denoise = Number(tokens.__AOS_DENOISE__);
+      if ('seed' in inputs && typeof inputs.seed === 'string') inputs.seed = Number(tokens.__AOS_SEED__);
+    }
+    if ((classType.toLowerCase().includes('ipadapter') || title.includes('ipadapter')) && node.inputs && typeof node.inputs === 'object') {
+      const inputs = node.inputs as Record<string, unknown>;
+      if ('weight' in inputs) inputs.weight = Number(tokens.__AOS_REFERENCE_STRENGTH__);
+      if ('weight_type' in inputs && typeof inputs.weight_type === 'string' && !inputs.weight_type) inputs.weight_type = 'linear';
+    }
+  }
+
+  let inputAssigned = false;
+  let maskAssigned = false;
+  let referenceAssigned = false;
+  for (const entry of imageNodes) {
+    const inputs = entry.node.inputs as Record<string, unknown>;
+    const title = entry.title;
+    if (title.includes('reference') || title.includes('style') || title.includes('ipadapter')) {
+      if (tokens.__AOS_REFERENCE_IMAGE__) {
+        inputs.image = tokens.__AOS_REFERENCE_IMAGE__;
+        referenceAssigned = true;
+      }
+    } else if (title.includes('mask')) {
+      inputs.image = tokens.__AOS_MASK_IMAGE__;
+      maskAssigned = true;
+    } else if (title.includes('input') || title.includes('source') || title.includes('image')) {
+      inputs.image = tokens.__AOS_INPUT_IMAGE__;
+      inputAssigned = true;
+    } else if (!inputAssigned) {
+      inputs.image = tokens.__AOS_INPUT_IMAGE__;
+      inputAssigned = true;
+    } else if (!maskAssigned) {
+      inputs.image = tokens.__AOS_MASK_IMAGE__;
+      maskAssigned = true;
+    } else if (!referenceAssigned && tokens.__AOS_REFERENCE_IMAGE__) {
+      inputs.image = tokens.__AOS_REFERENCE_IMAGE__;
+      referenceAssigned = true;
+    }
+  }
+
+  let positiveAssigned = false;
+  let negativeAssigned = false;
+  for (const entry of textNodes) {
+    const inputs = entry.node.inputs as Record<string, unknown>;
+    if (entry.title.includes('negative')) {
+      inputs.text = tokens.__AOS_NEGATIVE_PROMPT__;
+      negativeAssigned = true;
+    } else if (entry.title.includes('positive') || entry.title.includes('prompt')) {
+      inputs.text = tokens.__AOS_POSITIVE_PROMPT__;
+      positiveAssigned = true;
+    } else if (!positiveAssigned) {
+      inputs.text = tokens.__AOS_POSITIVE_PROMPT__;
+      positiveAssigned = true;
+    } else if (!negativeAssigned) {
+      inputs.text = tokens.__AOS_NEGATIVE_PROMPT__;
+      negativeAssigned = true;
+    }
+  }
+}
+
+async function uploadComfyImage(base: string, bytes: Uint8Array, filename: string): Promise<string> {
+  const copy = Uint8Array.from(bytes);
+  const form = new FormData();
+  form.append('image', new Blob([copy.buffer], { type: 'image/png' }), filename);
+  form.append('type', 'input');
+  form.append('overwrite', 'true');
+  const response = await fetchWithTimeout(`${base}/upload/image`, { method: 'POST', body: form }, 60000);
+  if (!response.ok) throw new Error(`ComfyUIへの画像アップロードに失敗しました（HTTP ${response.status}）。`);
+  const result = await response.json() as { name?: string; subfolder?: string };
+  if (!result.name) throw new Error('ComfyUIからアップロード画像名が返されませんでした。');
+  return result.subfolder ? `${result.subfolder}/${result.name}` : result.name;
+}
+
+function findOutputImage(historyEntry: unknown): { nodeId: string; filename: string; subfolder: string; type: string } | null {
+  if (!historyEntry || typeof historyEntry !== 'object') return null;
+  const outputs = (historyEntry as { outputs?: unknown }).outputs;
+  if (!outputs || typeof outputs !== 'object') return null;
+  for (const [nodeId, output] of Object.entries(outputs)) {
+    if (!output || typeof output !== 'object') continue;
+    const images = (output as { images?: unknown }).images;
+    if (!Array.isArray(images)) continue;
+    const image = images.find((entry) => entry && typeof entry === 'object' && typeof (entry as { filename?: unknown }).filename === 'string');
+    if (!image || typeof image !== 'object') continue;
+    const data = image as { filename: string; subfolder?: string; type?: string };
+    return { nodeId, filename: data.filename, subfolder: data.subfolder ?? '', type: data.type ?? 'output' };
+  }
+  return null;
+}
+
+async function saveGeneratedOutput(projectId: string, filename: string, bytes: Uint8Array): Promise<NativeFilePayload> {
+  const safeProject = projectId.replace(/[^a-zA-Z0-9_-]/g, '_') || 'project';
+  const safeName = filename.replace(/[\\/:*?"<>|]/g, '_') || `aos-ai-${Date.now()}.png`;
+  const directory = path.join(app.getPath('userData'), 'generated', safeProject);
+  await mkdir(directory, { recursive: true });
+  const uniqueName = `${Date.now()}-${crypto.randomUUID().slice(0, 8)}-${safeName}`;
+  const targetPath = path.join(directory, uniqueName.toLowerCase().endsWith('.png') ? uniqueName : `${uniqueName}.png`);
+  await writeFile(targetPath, Buffer.from(bytes));
+  return readNativeFile(targetPath);
+}
+
+async function runComfyUi(request: ComfyUiRunRequest): Promise<ComfyUiRunResult> {
+  const base = normalizeEndpoint(request.endpoint);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(request.workflowJson);
+  } catch {
+    throw new Error('ComfyUI Workflow JSONを解析できません。API形式のJSONを読み込んでください。');
+  }
+  if (!parsed || typeof parsed !== 'object') throw new Error('ComfyUI Workflow JSONが空です。');
+
+  const inputName = await uploadComfyImage(base, request.inputImage, `aos-input-${request.documentId}.png`);
+  const maskName = await uploadComfyImage(base, request.maskImage, `aos-mask-${request.documentId}.png`);
+  const referenceName = request.referenceImage ? await uploadComfyImage(base, request.referenceImage, `aos-reference-${request.documentId}.png`) : '';
+  const outputPrefix = request.outputPrefix.replace(/[\\/:*?"<>|]/g, '_') || 'AOS_Output';
+  const seed = String(Math.floor(Math.random() * Number.MAX_SAFE_INTEGER));
+  const tokens = {
+    '__AOS_POSITIVE_PROMPT__': request.positivePrompt,
+    '__AOS_NEGATIVE_PROMPT__': request.negativePrompt,
+    '__AOS_INPUT_IMAGE__': inputName,
+    '__AOS_MASK_IMAGE__': maskName,
+    '__AOS_REFERENCE_IMAGE__': referenceName,
+    '__AOS_REFERENCE_STRENGTH__': String(request.referenceStrength),
+    '__AOS_DENOISE__': String(request.denoiseStrength),
+    '__AOS_TEMPLATE_PRESERVE__': String(request.templatePreserve),
+    '__AOS_MODE__': request.mode,
+    '__AOS_OUTPUT_PREFIX__': outputPrefix,
+    '__AOS_SEED__': seed,
+  };
+  const workflowContainer = parsed as { prompt?: unknown };
+  const promptGraph = replaceWorkflowTokens(workflowContainer.prompt && typeof workflowContainer.prompt === 'object' ? workflowContainer.prompt : parsed, tokens);
+  autoInjectCommonComfyNodes(promptGraph, tokens);
+  const clientId = crypto.randomUUID();
+  const queueResponse = await fetchWithTimeout(`${base}/prompt`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ prompt: promptGraph, client_id: clientId }),
+  }, 30000);
+  if (!queueResponse.ok) {
+    const detail = await queueResponse.text().catch(() => '');
+    throw new Error(`ComfyUIへのキュー登録に失敗しました（HTTP ${queueResponse.status}）。${detail.slice(0, 300)}`);
+  }
+  const queued = await queueResponse.json() as { prompt_id?: string; error?: unknown; node_errors?: unknown };
+  if (!queued.prompt_id) throw new Error(`ComfyUIからprompt_idが返されませんでした。${queued.error ? ` ${JSON.stringify(queued.error)}` : ''}`);
+  const promptId = queued.prompt_id;
+  const deadline = Date.now() + Math.min(3600, Math.max(30, request.timeoutSeconds)) * 1000;
+  let outputImage: ReturnType<typeof findOutputImage> = null;
+
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 1400));
+    const historyResponse = await fetchWithTimeout(`${base}/history/${encodeURIComponent(promptId)}`, {}, 15000);
+    if (!historyResponse.ok) continue;
+    const history = await historyResponse.json() as Record<string, unknown>;
+    const entry = history[promptId];
+    outputImage = findOutputImage(entry);
+    if (outputImage) break;
+    const status = entry && typeof entry === 'object' ? (entry as { status?: { status_str?: string; completed?: boolean } }).status : undefined;
+    if (status?.status_str === 'error') throw new Error('ComfyUIワークフローの実行中にエラーが発生しました。ComfyUIのコンソールを確認してください。');
+    if (status?.completed) throw new Error('ComfyUIの処理は完了しましたが、出力画像が見つかりません。Save Imageノードを確認してください。');
+  }
+  if (!outputImage) throw new Error('ComfyUI処理がタイムアウトしました。タイムアウト設定またはワークフローを確認してください。');
+
+  const query = new URLSearchParams({
+    filename: outputImage.filename,
+    subfolder: outputImage.subfolder,
+    type: outputImage.type,
+  });
+  const outputResponse = await fetchWithTimeout(`${base}/view?${query.toString()}`, {}, 60000);
+  if (!outputResponse.ok) throw new Error(`ComfyUIの出力画像を取得できませんでした（HTTP ${outputResponse.status}）。`);
+  const outputBytes = new Uint8Array(await outputResponse.arrayBuffer());
+  const output = await saveGeneratedOutput(request.projectId, outputImage.filename, outputBytes);
+  return { promptId, outputNodeId: outputImage.nodeId, output };
 }
 
 function sendCommand(window: BrowserWindow, command: string): void {
@@ -327,7 +691,7 @@ function createMainWindow(): BrowserWindow {
     allowWindowClose.delete(window.id);
   });
 
-  window.webContents.setWindowOpenHandler(({ url }) => {
+  window.webContents.setWindowOpenHandler(({ url }: { url: string }) => {
     if (url.startsWith('https://')) {
       void shell.openExternal(url);
     }
@@ -456,6 +820,22 @@ app.whenReady().then(() => {
   });
 
   ipcMain.handle('project:get-recent', async () => loadRecentProjects());
+
+  ipcMain.handle('ai:pick-workflow', async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const options: Electron.OpenDialogOptions = {
+      title: 'ComfyUI API Workflow JSONを選択',
+      properties: ['openFile'],
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    };
+    const result = window ? await dialog.showOpenDialog(window, options) : await dialog.showOpenDialog(options);
+    if (result.canceled || !result.filePaths[0]) return null;
+    const workflowPath = result.filePaths[0];
+    return { path: workflowPath, name: path.basename(workflowPath), json: await readFile(workflowPath, 'utf8') };
+  });
+
+  ipcMain.handle('ai:comfy-test', async (_event, endpoint: string) => testComfyUiConnection(endpoint));
+  ipcMain.handle('ai:comfy-run', async (_event, request: ComfyUiRunRequest) => runComfyUi(request));
 
   createMainWindow();
 

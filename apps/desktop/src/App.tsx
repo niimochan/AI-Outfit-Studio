@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AosAssetKind,
+  AosAiJob,
+  AosAiMaskMode,
+  AosAiSettings,
   AosMaterialOverride,
   AosProjectManifest,
   AosTextureDocument,
@@ -11,6 +14,7 @@ import type {
 import {
   APP_NAME,
   APP_VERSION,
+  createDefaultAiSettings,
   createProjectManifest,
   textureDocumentAssetId,
 } from '@ai-outfit-studio/common';
@@ -21,6 +25,7 @@ import {
   canvasToPngBlob,
   getImageDimensions,
   renderTextureDocument,
+  renderTextureMask,
   type TextureDocumentOutput,
   type TextureSourceAsset,
 } from './texture/texture-renderer';
@@ -37,7 +42,7 @@ type CameraCommand = 'fit' | 'reset' | null;
 type SelectedItem =
   | { kind: 'project' }
   | { kind: 'avatar'; id: string }
-  | { kind: 'reference' | 'template'; id: string }
+  | { kind: 'reference' | 'template' | 'generated'; id: string }
   | { kind: 'texture-document'; id: string };
 type WorkspaceMode = '3d' | 'texture';
 type Notice = { tone: 'info' | 'warning' | 'error'; message: string } | null;
@@ -68,7 +73,7 @@ export function App() {
   const shellRef = useRef<HTMLDivElement>(null);
   const textureOutputRef = useRef<TextureDocumentOutput[]>([]);
   const textureRenderGenerationRef = useRef(0);
-  const runtimeAssetsRef = useRef<{ avatar: RuntimeAsset | null; references: RuntimeAsset[]; templates: RuntimeAsset[] }>({ avatar: null, references: [], templates: [] });
+  const runtimeAssetsRef = useRef<{ avatar: RuntimeAsset | null; references: RuntimeAsset[]; templates: RuntimeAsset[]; generated: RuntimeAsset[] }>({ avatar: null, references: [], templates: [], generated: [] });
 
   const [project, setProject] = useState<AosProjectManifest>(() => createProjectManifest());
   const [projectPath, setProjectPath] = useState<string | null>(null);
@@ -77,6 +82,7 @@ export function App() {
   const [avatar, setAvatar] = useState<RuntimeAsset | null>(null);
   const [references, setReferences] = useState<RuntimeAsset[]>([]);
   const [templates, setTemplates] = useState<RuntimeAsset[]>([]);
+  const [generated, setGenerated] = useState<RuntimeAsset[]>([]);
   const [textureDocuments, setTextureDocuments] = useState<AosTextureDocument[]>([]);
   const [textureOutputs, setTextureOutputs] = useState<TextureDocumentOutput[]>([]);
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('3d');
@@ -84,6 +90,8 @@ export function App() {
   const [materials, setMaterials] = useState<VrmMaterialInfo[]>([]);
   const [selectedMaterialKey, setSelectedMaterialKey] = useState<string | null>(null);
   const [materialOverrides, setMaterialOverrides] = useState<AosMaterialOverride[]>([]);
+  const [aiSettings, setAiSettings] = useState<AosAiSettings>(() => createDefaultAiSettings());
+  const [aiJobs, setAiJobs] = useState<AosAiJob[]>([]);
   const [selectedItem, setSelectedItem] = useState<SelectedItem>({ kind: 'project' });
 
   const [loadState, setLoadState] = useState<LoadState>('idle');
@@ -145,7 +153,7 @@ export function App() {
       return;
     }
 
-    const currentAssets = kind === 'reference' ? references : templates;
+    const currentAssets = kind === 'reference' ? references : kind === 'template' ? templates : generated;
     const existingKeys = new Set(currentAssets.map((asset) => asset.meta.sourcePath || `${asset.meta.name}:${asset.meta.size}`));
     const unique = accepted
       .map((file) => runtimeAssetFromFile(file, kind, sourcePathForFile(file)))
@@ -165,10 +173,11 @@ export function App() {
     }
 
     if (kind === 'reference') setReferences((current) => [...current, ...unique]);
-    else setTemplates((current) => [...current, ...unique]);
+    else if (kind === 'template') setTemplates((current) => [...current, ...unique]);
+    else setGenerated((current) => [...current, ...unique]);
     setSelectedItem({ kind, id: unique[0]!.meta.id });
     setIsDirty(true);
-  }, [avatar, references, showNotice, sourcePathForFile, templates]);
+  }, [avatar, generated, references, showNotice, sourcePathForFile, templates]);
 
   const addNativeAssets = useCallback(async (kind: AosAssetKind) => {
     if (!window.aosDesktop) {
@@ -197,7 +206,7 @@ export function App() {
         return;
       }
 
-      const currentAssets = kind === 'reference' ? references : templates;
+      const currentAssets = kind === 'reference' ? references : kind === 'template' ? templates : generated;
       const existingPaths = new Set(currentAssets.map((asset) => asset.meta.sourcePath));
       const unique = runtime.filter((asset) => {
         if (existingPaths.has(asset.meta.sourcePath)) {
@@ -212,13 +221,14 @@ export function App() {
         return;
       }
       if (kind === 'reference') setReferences((current) => [...current, ...unique]);
-      else setTemplates((current) => [...current, ...unique]);
+      else if (kind === 'template') setTemplates((current) => [...current, ...unique]);
+      else setGenerated((current) => [...current, ...unique]);
       setSelectedItem({ kind, id: unique[0]!.meta.id });
       setIsDirty(true);
     } catch (error) {
       showNotice({ tone: 'error', message: error instanceof Error ? error.message : 'ファイル選択に失敗しました。' });
     }
-  }, [avatar, references, showNotice, templates]);
+  }, [avatar, generated, references, showNotice, templates]);
 
   const buildManifest = useCallback((): AosProjectManifest => ({
     ...project,
@@ -227,10 +237,13 @@ export function App() {
       avatar: avatar?.meta ?? null,
       references: references.map((asset) => asset.meta),
       templates: templates.map((asset) => asset.meta),
+      generated: generated.map((asset) => asset.meta),
     },
     materialOverrides,
     textureDocuments,
-  }), [avatar, materialOverrides, project, references, templates, textureDocuments]);
+    aiSettings,
+    aiJobs,
+  }), [aiJobs, aiSettings, avatar, generated, materialOverrides, project, references, templates, textureDocuments]);
 
   const confirmDiscard = useCallback(async (): Promise<boolean> => {
     if (!isDirty) return true;
@@ -244,9 +257,11 @@ export function App() {
     disposeRuntimeAsset(avatar);
     disposeRuntimeAssets(references);
     disposeRuntimeAssets(templates);
+    disposeRuntimeAssets(generated);
     setAvatar(null);
     setReferences([]);
     setTemplates([]);
+    setGenerated([]);
     setTextureDocuments([]);
     setTextureOutputs((current) => { current.forEach((output) => URL.revokeObjectURL(output.previewUrl)); return []; });
     setWorkspaceMode('3d');
@@ -254,13 +269,15 @@ export function App() {
     setMaterials([]);
     setSelectedMaterialKey(null);
     setMaterialOverrides([]);
+    setAiSettings(createDefaultAiSettings());
+    setAiJobs([]);
     setLoadState('idle');
     setProgress(null);
     setLoadResult(null);
     setErrorMessage(null);
     setStats(initialStats);
     setSelectedItem({ kind: 'project' });
-  }, [avatar, references, templates]);
+  }, [avatar, generated, references, templates]);
 
   const newProject = useCallback(async () => {
     if (!(await confirmDiscard())) return;
@@ -289,16 +306,25 @@ export function App() {
       const meta = index >= 0 ? remainingTemplateMeta.splice(index, 1)[0] : undefined;
       return runtimeAssetFromPayload(file, 'template', meta);
     });
+    const remainingGeneratedMeta = [...payload.manifest.assets.generated];
+    const nextGenerated = payload.assets.generated.map((file) => {
+      const index = remainingGeneratedMeta.findIndex((asset) => asset.sourcePath === file.path);
+      const meta = index >= 0 ? remainingGeneratedMeta.splice(index, 1)[0] : undefined;
+      return runtimeAssetFromPayload(file, 'generated', meta);
+    });
 
     setProject(payload.manifest);
     setProjectPath(payload.path);
     setAvatar(nextAvatar);
     setReferences(nextReferences);
     setTemplates(nextTemplates);
+    setGenerated(nextGenerated);
     setTextureDocuments(payload.manifest.textureDocuments ?? []);
     setWorkspaceMode('3d');
     setActiveTextureDocumentId(payload.manifest.textureDocuments?.[0]?.id ?? null);
     setMaterialOverrides(payload.manifest.materialOverrides ?? []);
+    setAiSettings(payload.manifest.aiSettings ?? createDefaultAiSettings());
+    setAiJobs(payload.manifest.aiJobs ?? []);
     setMaterials([]);
     setSelectedMaterialKey(null);
     setSelectedItem(nextAvatar ? { kind: 'avatar', id: nextAvatar.meta.id } : { kind: 'project' });
@@ -348,7 +374,7 @@ export function App() {
       return;
     }
 
-    const unlinkedAssets = [avatar, ...references, ...templates].filter((asset): asset is RuntimeAsset => Boolean(asset))
+    const unlinkedAssets = [avatar, ...references, ...templates, ...generated].filter((asset): asset is RuntimeAsset => Boolean(asset))
       .filter((asset) => !asset.meta.sourcePath);
     if (unlinkedAssets.length > 0) {
       showNotice({ tone: 'warning', message: '保存後に再読込できないアセットがあります。デスクトップの選択ボタンから追加し直してください。' });
@@ -369,7 +395,7 @@ export function App() {
     } catch (error) {
       showNotice({ tone: 'error', message: error instanceof Error ? error.message : 'プロジェクトを保存できませんでした。' });
     }
-  }, [avatar, buildManifest, projectPath, references, showNotice, templates]);
+  }, [avatar, buildManifest, generated, projectPath, references, showNotice, templates]);
 
   const removeAsset = useCallback((kind: AosAssetKind, id: string) => {
     if (kind === 'avatar') {
@@ -393,7 +419,7 @@ export function App() {
         layers: document.layers.filter((layer) => layer.sourceAssetId !== id),
         updatedAt: new Date().toISOString(),
       })));
-    } else {
+    } else if (kind === 'template') {
       setTemplates((current) => {
         const removed = current.find((asset) => asset.meta.id === id);
         disposeRuntimeAsset(removed);
@@ -417,6 +443,19 @@ export function App() {
         setActiveTextureDocumentId(null);
         setWorkspaceMode('3d');
       }
+    } else {
+      setGenerated((current) => {
+        const removed = current.find((asset) => asset.meta.id === id);
+        disposeRuntimeAsset(removed);
+        return current.filter((asset) => asset.meta.id !== id);
+      });
+      setTextureDocuments((current) => current.map((document) => ({
+        ...document,
+        layers: document.layers.filter((layer) => layer.sourceAssetId !== id),
+        updatedAt: new Date().toISOString(),
+      })));
+      setMaterialOverrides((current) => current.map((override) => override.textureAssetId === id ? { ...override, textureAssetId: null } : override));
+      setAiJobs((current) => current.map((job) => job.outputAssetId === id ? { ...job, outputAssetId: null } : job));
     }
     setSelectedItem({ kind: 'project' });
     setIsDirty(true);
@@ -451,7 +490,12 @@ export function App() {
   const textureSourceAssets = useMemo<TextureSourceAsset[]>(() => [
     ...references.map((asset) => ({ id: asset.meta.id, name: asset.meta.name, file: asset.file, previewUrl: asset.previewUrl })),
     ...templates.map((asset) => ({ id: asset.meta.id, name: asset.meta.name, file: asset.file, previewUrl: asset.previewUrl })),
-  ], [references, templates]);
+    ...generated.map((asset) => ({ id: asset.meta.id, name: asset.meta.name, file: asset.file, previewUrl: asset.previewUrl })),
+  ], [generated, references, templates]);
+
+  const referenceSourceAssets = useMemo<TextureSourceAsset[]>(() => (
+    references.map((asset) => ({ id: asset.meta.id, name: asset.meta.name, file: asset.file, previewUrl: asset.previewUrl }))
+  ), [references]);
 
   const activeTextureDocument = useMemo(
     () => textureDocuments.find((document) => document.id === activeTextureDocumentId) ?? null,
@@ -500,6 +544,7 @@ export function App() {
     const outputId = textureDocumentAssetId(documentId);
     setTextureDocuments((current) => current.filter((document) => document.id !== documentId));
     setMaterialOverrides((current) => current.map((override) => override.textureAssetId === outputId ? { ...override, textureAssetId: null } : override));
+    setAiJobs((current) => current.filter((job) => job.documentId !== documentId));
     if (activeTextureDocumentId === documentId) {
       setActiveTextureDocumentId(null);
       setWorkspaceMode('3d');
@@ -531,6 +576,129 @@ export function App() {
       showNotice({ tone: 'error', message: error instanceof Error ? error.message : 'PNGを書き出せませんでした。' });
     }
   }, [showNotice, textureSourceAssets]);
+
+
+  const updateAiSettings = useCallback((next: AosAiSettings) => {
+    setAiSettings(next);
+    setIsDirty(true);
+  }, []);
+
+  const runAiAssist = useCallback(async (document: AosTextureDocument, selectedLayerId: string | null) => {
+    const desktop = window.aosDesktop;
+    if (!desktop) {
+      showNotice({ tone: 'error', message: 'ComfyUI連携はデスクトップ版でのみ利用できます。' });
+      return;
+    }
+    if (!aiSettings.workflowJson.trim()) {
+      showNotice({ tone: 'warning', message: '先にComfyUI API Workflow JSONを読み込んでください。' });
+      return;
+    }
+
+    const referenceAsset = aiSettings.referenceAssetId
+      ? references.find((asset) => asset.meta.id === aiSettings.referenceAssetId) ?? null
+      : null;
+    if (aiSettings.mode !== 'prompt-only' && !referenceAsset) {
+      showNotice({ tone: 'warning', message: 'Reference Guidedモードでは参考画像を1枚選択してください。' });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const job: AosAiJob = {
+      id: crypto.randomUUID(),
+      provider: 'comfyui',
+      documentId: document.id,
+      documentName: document.name,
+      status: 'running',
+      positivePrompt: aiSettings.positivePrompt,
+      negativePrompt: aiSettings.negativePrompt,
+      maskMode: aiSettings.maskMode,
+      mode: aiSettings.mode,
+      referenceAssetId: referenceAsset?.meta.id ?? null,
+      referenceAssetName: referenceAsset?.meta.name ?? null,
+      workflowName: aiSettings.workflowName,
+      createdAt: now,
+      completedAt: null,
+      promptId: null,
+      outputAssetId: null,
+      error: null,
+    };
+    setAiJobs((current) => [...current.slice(-99), job]);
+    setIsDirty(true);
+
+    try {
+      const sourceMap = new Map(textureSourceAssets.map((asset) => [asset.id, asset]));
+      const [inputCanvas, maskCanvas] = await Promise.all([
+        renderTextureDocument(document, sourceMap),
+        renderTextureMask(document, sourceMap, aiSettings.maskMode, selectedLayerId),
+      ]);
+      const [inputBlob, maskBlob, referenceBytes] = await Promise.all([
+        canvasToPngBlob(inputCanvas),
+        canvasToPngBlob(maskCanvas),
+        referenceAsset ? referenceAsset.file.arrayBuffer().then((buffer) => new Uint8Array(buffer)) : Promise.resolve(null),
+      ]);
+      const result = await desktop.runComfyUi({
+        projectId: project.id,
+        documentId: document.id,
+        endpoint: aiSettings.endpoint,
+        workflowJson: aiSettings.workflowJson,
+        positivePrompt: aiSettings.positivePrompt,
+        negativePrompt: aiSettings.negativePrompt,
+        inputImage: new Uint8Array(await inputBlob.arrayBuffer()),
+        maskImage: new Uint8Array(await maskBlob.arrayBuffer()),
+        referenceImage: referenceBytes,
+        mode: aiSettings.mode,
+        referenceStrength: aiSettings.referenceStrength,
+        denoiseStrength: aiSettings.denoiseStrength,
+        templatePreserve: aiSettings.templatePreserve,
+        outputPrefix: `${project.name}-${document.name}`,
+        timeoutSeconds: aiSettings.timeoutSeconds,
+      });
+      const outputAsset = runtimeAssetFromPayload(result.output, 'generated');
+      setGenerated((current) => [...current, outputAsset]);
+
+      if (aiSettings.autoAddResultLayer) {
+        const dimensions = await getImageDimensions(outputAsset.file);
+        const fitScale = Math.min(document.width / dimensions.width, document.height / dimensions.height);
+        const layer = {
+          id: crypto.randomUUID(),
+          name: `AI Result ${new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}`,
+          sourceAssetId: outputAsset.meta.id,
+          visible: true,
+          opacity: 1,
+          blendMode: 'source-over' as const,
+          x: document.width / 2,
+          y: document.height / 2,
+          scaleX: fitScale,
+          scaleY: fitScale,
+          rotation: 0,
+          eraserStrokes: [],
+        };
+        setTextureDocuments((current) => current.map((entry) => entry.id === document.id
+          ? { ...entry, layers: [...entry.layers, layer], updatedAt: new Date().toISOString() }
+          : entry));
+      }
+
+      setAiJobs((current) => current.map((entry) => entry.id === job.id ? {
+        ...entry,
+        status: 'completed',
+        completedAt: new Date().toISOString(),
+        promptId: result.promptId,
+        outputAssetId: outputAsset.meta.id,
+      } : entry));
+      setIsDirty(true);
+      showNotice({ tone: 'info', message: `AI生成が完了しました：${outputAsset.meta.name}` });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'AI生成に失敗しました。';
+      setAiJobs((current) => current.map((entry) => entry.id === job.id ? {
+        ...entry,
+        status: 'failed',
+        completedAt: new Date().toISOString(),
+        error: message,
+      } : entry));
+      setIsDirty(true);
+      showNotice({ tone: 'error', message });
+    }
+  }, [aiSettings, project.id, project.name, references, showNotice, textureSourceAssets]);
 
   useEffect(() => {
     const generation = ++textureRenderGenerationRef.current;
@@ -620,8 +788,8 @@ export function App() {
   }), [newProject, openProject, saveProject]);
 
   useEffect(() => {
-    runtimeAssetsRef.current = { avatar, references, templates };
-  }, [avatar, references, templates]);
+    runtimeAssetsRef.current = { avatar, references, templates, generated };
+  }, [avatar, generated, references, templates]);
 
   useEffect(() => {
     textureOutputRef.current = textureOutputs;
@@ -631,6 +799,7 @@ export function App() {
     disposeRuntimeAsset(runtimeAssetsRef.current.avatar);
     disposeRuntimeAssets(runtimeAssetsRef.current.references);
     disposeRuntimeAssets(runtimeAssetsRef.current.templates);
+    disposeRuntimeAssets(runtimeAssetsRef.current.generated);
     textureOutputRef.current.forEach((output) => URL.revokeObjectURL(output.previewUrl));
   }, []);
 
@@ -648,8 +817,9 @@ export function App() {
     if (selectedItem.kind === 'avatar') return avatar;
     if (selectedItem.kind === 'reference') return references.find((asset) => asset.meta.id === selectedItem.id) ?? null;
     if (selectedItem.kind === 'template') return templates.find((asset) => asset.meta.id === selectedItem.id) ?? null;
+    if (selectedItem.kind === 'generated') return generated.find((asset) => asset.meta.id === selectedItem.id) ?? null;
     return null;
-  }, [avatar, references, selectedItem, templates]);
+  }, [avatar, generated, references, selectedItem, templates]);
 
   const selectedTextureDocument = selectedItem.kind === 'texture-document'
     ? textureDocuments.find((document) => document.id === selectedItem.id) ?? null
@@ -676,8 +846,9 @@ export function App() {
     () => [
       ...templates.map((asset) => ({ id: asset.meta.id, file: asset.file })),
       ...textureOutputs.map((output) => ({ id: output.id, file: output.file })),
+      ...generated.map((asset) => ({ id: asset.meta.id, file: asset.file })),
     ],
-    [templates, textureOutputs],
+    [generated, templates, textureOutputs],
   );
 
   const updateSelectedMaterial = useCallback((patch: Partial<AosMaterialOverride>) => {
@@ -761,7 +932,7 @@ export function App() {
         </section>
 
         <section className="panel-section asset-list">
-          <div className="section-heading"><span>ASSETS</span><small>{(avatar ? 1 : 0) + references.length + templates.length + textureDocuments.length}</small></div>
+          <div className="section-heading"><span>ASSETS</span><small>{(avatar ? 1 : 0) + references.length + templates.length + generated.length + textureDocuments.length}</small></div>
 
           <div className="asset-group-heading">
             <span>AVATAR</span>
@@ -801,6 +972,17 @@ export function App() {
           {templates.length === 0 && <button className="empty-asset-row" type="button" onClick={() => void addNativeAssets('template')}>テンプレートを追加</button>}
 
           <div className="asset-group-heading">
+            <span>AI GENERATED <b>{generated.length}</b></span>
+          </div>
+          {generated.map((asset) => (
+            <button className={`asset-row ${selectedItem.kind === 'generated' && selectedItem.id === asset.meta.id ? 'active' : ''}`} type="button" key={asset.meta.id} onClick={() => setSelectedItem({ kind: 'generated', id: asset.meta.id })}>
+              {asset.previewUrl ? <img className="asset-thumb checkerboard" src={asset.previewUrl} alt="" /> : <span className="asset-icon">AI</span>}
+              <span className="asset-copy"><strong>{asset.meta.name}</strong><small>{formatBytes(asset.meta.size)}</small></span>
+            </button>
+          ))}
+          {generated.length === 0 && <div className="asset-empty-copy">ComfyUIの生成結果がここに保存されます。</div>}
+
+          <div className="asset-group-heading">
             <span>TEXTURE DOCS <b>{textureDocuments.length}</b></span>
           </div>
           {textureDocuments.map((document) => {
@@ -837,9 +1019,14 @@ export function App() {
           <TextureEditor
             document={activeTextureDocument}
             assets={textureSourceAssets}
+            referenceAssets={referenceSourceAssets}
             onChange={updateTextureDocument}
             onExport={(document) => void exportTextureDocument(document)}
             onShow3d={() => setWorkspaceMode('3d')}
+            aiSettings={aiSettings}
+            aiJobs={aiJobs}
+            onAiSettingsChange={updateAiSettings}
+            onRunAi={runAiAssist}
           />
         ) : (
           <>
@@ -866,10 +1053,10 @@ export function App() {
             {activePreview && (
               <div className="reference-preview">
                 <div>
-                  <strong>{selectedItem.kind === 'template' ? 'TEMPLATE PREVIEW' : 'REFERENCE PREVIEW'}</strong>
+                  <strong>{selectedItem.kind === 'template' ? 'TEMPLATE PREVIEW' : selectedItem.kind === 'generated' ? 'AI RESULT PREVIEW' : 'REFERENCE PREVIEW'}</strong>
                   <button type="button" onClick={() => setSelectedItem({ kind: 'project' })}>×</button>
                 </div>
-                <img className={selectedItem.kind === 'template' ? 'checkerboard' : ''} src={activePreview.previewUrl!} alt={activePreview.meta.name} />
+                <img className={selectedItem.kind === 'template' || selectedItem.kind === 'generated' ? 'checkerboard' : ''} src={activePreview.previewUrl!} alt={activePreview.meta.name} />
                 <span>{activePreview.meta.name}</span>
               </div>
             )}
@@ -902,6 +1089,8 @@ export function App() {
               <dt>Avatar</dt><dd>{avatar ? '1' : '0'}</dd>
               <dt>References</dt><dd>{references.length}</dd>
               <dt>Templates</dt><dd>{templates.length}</dd>
+              <dt>AI outputs</dt><dd>{generated.length}</dd>
+              <dt>AI jobs</dt><dd>{aiJobs.length}</dd>
               <dt>Texture docs</dt><dd>{textureDocuments.length}</dd>
               <dt>Materials</dt><dd>{materials.length}</dd>
               <dt>Overrides</dt><dd>{materialOverrides.length}</dd>
@@ -925,7 +1114,7 @@ export function App() {
             </>
           ) : selectedAsset ? (
             <>
-              {selectedAsset.previewUrl && <img className={`inspector-preview ${selectedItem.kind === 'template' ? 'checkerboard' : ''}`} src={selectedAsset.previewUrl} alt={selectedAsset.meta.name} />}
+              {selectedAsset.previewUrl && <img className={`inspector-preview ${selectedItem.kind === 'template' || selectedItem.kind === 'generated' ? 'checkerboard' : ''}`} src={selectedAsset.previewUrl} alt={selectedAsset.meta.name} />}
               <dl className="inspector-grid">
                 <dt>File</dt><dd title={selectedAsset.meta.name}>{selectedAsset.meta.name}</dd>
                 <dt>Type</dt><dd>{selectedAsset.meta.kind}</dd>
@@ -987,10 +1176,11 @@ export function App() {
                     >
                       <option value="">元のテクスチャ</option>
                       {textureOutputs.length > 0 && <optgroup label="2D編集結果">{textureOutputs.map((output) => <option key={output.id} value={output.id}>{output.name}</option>)}</optgroup>}
+                      {generated.length > 0 && <optgroup label="AI生成結果">{generated.map((asset) => <option key={asset.meta.id} value={asset.meta.id}>{asset.meta.name}</option>)}</optgroup>}
                       {templates.length > 0 && <optgroup label="テンプレート">{templates.map((asset) => <option key={asset.meta.id} value={asset.meta.id}>{asset.meta.name}</option>)}</optgroup>}
                     </select>
                   </label>
-                  {templates.length === 0 && textureOutputs.length === 0 && <p className="field-help">先にVRoidテンプレート画像を追加してください。</p>}
+                  {templates.length === 0 && textureOutputs.length === 0 && generated.length === 0 && <p className="field-help">先にVRoidテンプレート画像を追加してください。</p>}
 
                   <div className="material-control-row">
                     <label className="field-label compact-field">
