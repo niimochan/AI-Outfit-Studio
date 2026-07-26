@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.1
+- Added garment isolation fix for Sprint B AI assist.
+- Exclude prepared reference layer from ComfyUI input when using reference modes.
+- Improved default prompts to suppress human-body redraws.
+
+## 0.6.0 — Auto Extract & Auto Fit Foundation
+
+- Added local reference background extraction with live preview.
+- Added auto-corner, white-background, black-background, and alpha-only modes.
+- Added threshold, feather, fit mode, and template padding controls.
+- Added template-alpha-bounds fitting and persistent extracted PNG assets.
+- Added automatic extracted-reference layer creation and AI reference selection.
+- Updated `.aos` project schema to 6.
+
 ## 0.5.1
 - Added Sprint A reference-aware AI assist.
 - Added AI mode, reference selection, execution preview, and workflow tokens.

@@ -1,6 +1,6 @@
 export const APP_NAME = 'AI Outfit Studio';
-export const APP_VERSION = '0.5.1';
-export const AOS_PROJECT_SCHEMA_VERSION = 5;
+export const APP_VERSION = '0.6.1';
+export const AOS_PROJECT_SCHEMA_VERSION = 6;
 
 export type AosAssetKind = 'avatar' | 'reference' | 'template' | 'generated';
 
@@ -67,6 +67,16 @@ export type AosAiProvider = 'comfyui';
 export type AosAiMaskMode = 'template-alpha' | 'selected-layer-eraser' | 'full-canvas';
 export type AosAiJobStatus = 'running' | 'completed' | 'failed';
 export type AosAiMode = 'prompt-only' | 'reference-guided' | 'reference-inpaint';
+export type AosReferenceExtractMode = 'auto-corners' | 'white-background' | 'black-background' | 'alpha-only';
+export type AosReferenceFitMode = 'template-bounds' | 'contain' | 'cover';
+
+export interface AosReferencePrepSettings {
+  extractMode: AosReferenceExtractMode;
+  threshold: number;
+  feather: number;
+  fitMode: AosReferenceFitMode;
+  padding: number;
+}
 
 export interface AosAiSettings {
   provider: AosAiProvider;
@@ -81,6 +91,7 @@ export interface AosAiSettings {
   referenceStrength: number;
   denoiseStrength: number;
   templatePreserve: number;
+  referencePrep: AosReferencePrepSettings;
   timeoutSeconds: number;
   autoAddResultLayer: boolean;
 }
@@ -191,14 +202,21 @@ export function createDefaultAiSettings(): AosAiSettings {
     endpoint: 'http://127.0.0.1:8188',
     workflowName: '',
     workflowJson: '',
-    positivePrompt: 'high quality VRoid clothing texture, preserve UV layout, seamless garment details',
-    negativePrompt: 'text, watermark, logo, extra objects, broken UV layout, cropped texture',
+    positivePrompt: 'flat VRoid clothing texture, garment fabric only, isolated clothing design, no human body, preserve the exact UV template layout, transfer only colors, fabric patterns, trims, ribbons, lace and garment decorations, high quality',
+    negativePrompt: 'person, character, human body, face, head, hair, eyes, arms, hands, fingers, legs, thighs, skin, shoes, full body illustration, character silhouette, background, text, logo, watermark, broken UV layout, cropped texture',
     maskMode: 'template-alpha',
     mode: 'prompt-only',
     referenceAssetId: null,
     referenceStrength: 0.7,
     denoiseStrength: 0.55,
     templatePreserve: 0.85,
+    referencePrep: {
+      extractMode: 'auto-corners',
+      threshold: 0.14,
+      feather: 0.08,
+      fitMode: 'template-bounds',
+      padding: 0.04,
+    },
     timeoutSeconds: 300,
     autoAddResultLayer: true,
   };

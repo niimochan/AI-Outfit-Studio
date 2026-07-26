@@ -55,6 +55,15 @@ export type AosAiProvider = 'comfyui';
 export type AosAiMaskMode = 'template-alpha' | 'selected-layer-eraser' | 'full-canvas';
 export type AosAiJobStatus = 'running' | 'completed' | 'failed';
 export type AosAiMode = 'prompt-only' | 'reference-guided' | 'reference-inpaint';
+export type AosReferenceExtractMode = 'auto-corners' | 'white-background' | 'black-background' | 'alpha-only';
+export type AosReferenceFitMode = 'template-bounds' | 'contain' | 'cover';
+export interface AosReferencePrepSettings {
+  extractMode: AosReferenceExtractMode;
+  threshold: number;
+  feather: number;
+  fitMode: AosReferenceFitMode;
+  padding: number;
+}
 export interface AosAiSettings {
   provider: AosAiProvider;
   endpoint: string;
@@ -68,6 +77,7 @@ export interface AosAiSettings {
   referenceStrength: number;
   denoiseStrength: number;
   templatePreserve: number;
+  referencePrep: AosReferencePrepSettings;
   timeoutSeconds: number;
   autoAddResultLayer: boolean;
 }
@@ -92,7 +102,7 @@ export interface AosAiJob {
 }
 
 export interface AosProjectManifest {
-  schemaVersion: 5;
+  schemaVersion: 6;
   appVersion: string;
   id: string;
   name: string;

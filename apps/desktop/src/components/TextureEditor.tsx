@@ -2,12 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AosAiJob,
   AosAiSettings,
+  AosReferencePrepSettings,
   AosTextureBlendMode,
   AosTextureDocument,
   AosTextureLayer,
 } from '@ai-outfit-studio/common';
 import {
+  canvasToPngBlob,
   createDefaultTextureLayer,
+  extractReferenceImage,
   fitTextureLayer,
   renderTextureDocument,
   type TextureFitMode,
@@ -20,6 +23,11 @@ interface TextureEditorProps {
   document: AosTextureDocument;
   assets: TextureSourceAsset[];
   referenceAssets: TextureSourceAsset[];
+  onPrepareReference: (
+    document: AosTextureDocument,
+    sourceAssetId: string,
+    settings: AosReferencePrepSettings,
+  ) => Promise<string | null>;
   onChange: (document: AosTextureDocument) => void;
   onExport: (document: AosTextureDocument) => void;
   onShow3d: () => void;
@@ -54,7 +62,7 @@ function replaceLayer(document: AosTextureDocument, layerId: string, patch: Part
   };
 }
 
-export function TextureEditor({ document, assets, referenceAssets, onChange, onExport, onShow3d, aiSettings, aiJobs, onAiSettingsChange, onRunAi }: TextureEditorProps) {
+export function TextureEditor({ document, assets, referenceAssets, onPrepareReference, onChange, onExport, onShow3d, aiSettings, aiJobs, onAiSettingsChange, onRunAi }: TextureEditorProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const draftRef = useRef(document);
@@ -74,6 +82,9 @@ export function TextureEditor({ document, assets, referenceAssets, onChange, onE
   const [renderError, setRenderError] = useState<string | null>(null);
   const [rendering, setRendering] = useState(false);
   const [aiRunning, setAiRunning] = useState(false);
+  const [referencePrepRunning, setReferencePrepRunning] = useState(false);
+  const [referencePreviewUrl, setReferencePreviewUrl] = useState<string | null>(null);
+  const [referencePreviewError, setReferencePreviewError] = useState<string | null>(null);
   const [connectionState, setConnectionState] = useState<{ tone: 'idle' | 'ok' | 'error'; message: string }>({ tone: 'idle', message: '未確認' });
   const [, forceHistoryRevision] = useState(0);
 
@@ -86,6 +97,39 @@ export function TextureEditor({ document, assets, referenceAssets, onChange, onE
     () => referenceAssets.find((asset) => asset.id === aiSettings.referenceAssetId) ?? null,
     [aiSettings.referenceAssetId, referenceAssets],
   );
+
+  useEffect(() => {
+    let disposed = false;
+    let objectUrl: string | null = null;
+    const timer = window.setTimeout(() => {
+      if (!selectedReferenceAsset) {
+        setReferencePreviewUrl(null);
+        setReferencePreviewError(null);
+        return;
+      }
+      setReferencePreviewError(null);
+      void extractReferenceImage(selectedReferenceAsset.file, aiSettings.referencePrep)
+        .then(canvasToPngBlob)
+        .then((blob) => {
+          if (disposed) return;
+          objectUrl = URL.createObjectURL(blob);
+          setReferencePreviewUrl((current) => {
+            if (current) URL.revokeObjectURL(current);
+            return objectUrl;
+          });
+        })
+        .catch((error: unknown) => {
+          if (!disposed) {
+            setReferencePreviewError(error instanceof Error ? error.message : '抽出プレビューを生成できませんでした。');
+          }
+        });
+    }, 180);
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [aiSettings.referencePrep, selectedReferenceAsset]);
 
   const setDraftSafe = useCallback((next: AosTextureDocument) => {
     draftRef.current = next;
@@ -122,8 +166,10 @@ export function TextureEditor({ document, assets, referenceAssets, onChange, onE
       return;
     }
     if (document.updatedAt !== committedRef.current.updatedAt && !pointerRef.current) {
+      const addedLayer = document.layers.length > committedRef.current.layers.length ? document.layers.at(-1) : null;
       committedRef.current = document;
       setDraftSafe(document);
+      if (addedLayer) setSelectedLayerId(addedLayer.id);
     }
   }, [document, setDraftSafe]);
 
@@ -297,6 +343,23 @@ export function TextureEditor({ document, assets, referenceAssets, onChange, onE
       setAiRunning(false);
     }
   }, [draft, onRunAi, selectedLayerId]);
+
+  const prepareReference = useCallback(async () => {
+    if (!selectedReferenceAsset) return;
+    setReferencePrepRunning(true);
+    try {
+      const preparedAssetId = await onPrepareReference(draft, selectedReferenceAsset.id, aiSettings.referencePrep);
+      if (preparedAssetId) {
+        onAiSettingsChange({
+          ...aiSettings,
+          mode: aiSettings.mode === 'prompt-only' ? 'reference-guided' : aiSettings.mode,
+          referenceAssetId: preparedAssetId,
+        });
+      }
+    } finally {
+      setReferencePrepRunning(false);
+    }
+  }, [aiSettings, draft, onAiSettingsChange, onPrepareReference, selectedReferenceAsset]);
 
   const documentJobs = useMemo(
     () => aiJobs.filter((job) => job.documentId === draft.id).slice(-6).reverse(),
@@ -493,9 +556,35 @@ export function TextureEditor({ document, assets, referenceAssets, onChange, onE
               {selectedReferenceAsset.previewUrl ? <img src={selectedReferenceAsset.previewUrl} alt="reference preview" /> : <span>REF</span>}
               <div>
                 <strong>{selectedReferenceAsset.name}</strong>
-                <small>{aiSettings.mode === 'prompt-only' ? '現在はPrompt Onlyのため参考画像は送信されません。' : '選択した参考画像はComfyUIへ送信されます。'}</small>
+                <small>{aiSettings.mode === 'prompt-only' ? '現在はPrompt Onlyのため参考画像は送信されません。' : '選択した参考画像はComfyUIへ送信されます。抽出レイヤーと同じ画像を選んでいても、AI入力キャンバスには自動で含めません。'}</small>
               </div>
             </div>}
+          </div>
+
+          <div className="ai-section-block reference-prep-section">
+            <div className="ai-section-title">REFERENCE PREP</div>
+            <div className="ai-two-column">
+              <label className="ai-field"><span>背景抽出</span><select value={aiSettings.referencePrep.extractMode} onChange={(event) => onAiSettingsChange({ ...aiSettings, referencePrep: { ...aiSettings.referencePrep, extractMode: event.target.value as AosReferencePrepSettings['extractMode'] } })}>
+                <option value="auto-corners">四隅から自動判定</option>
+                <option value="white-background">白背景を除去</option>
+                <option value="black-background">黒背景を除去</option>
+                <option value="alpha-only">既存Alphaのみ</option>
+              </select></label>
+              <label className="ai-field"><span>自動フィット</span><select value={aiSettings.referencePrep.fitMode} onChange={(event) => onAiSettingsChange({ ...aiSettings, referencePrep: { ...aiSettings.referencePrep, fitMode: event.target.value as AosReferencePrepSettings['fitMode'] } })}>
+                <option value="template-bounds">テンプレートAlpha範囲</option>
+                <option value="contain">キャンバスへ内接</option>
+                <option value="cover">キャンバス全面</option>
+              </select></label>
+            </div>
+            <label className="ai-field"><span>背景判定しきい値 {Math.round(aiSettings.referencePrep.threshold * 100)}%</span><input type="range" min="0" max="0.5" step="0.01" value={aiSettings.referencePrep.threshold} onChange={(event) => onAiSettingsChange({ ...aiSettings, referencePrep: { ...aiSettings.referencePrep, threshold: Number(event.target.value) } })} /></label>
+            <label className="ai-field"><span>境界フェザー {Math.round(aiSettings.referencePrep.feather * 100)}%</span><input type="range" min="0" max="0.4" step="0.01" value={aiSettings.referencePrep.feather} onChange={(event) => onAiSettingsChange({ ...aiSettings, referencePrep: { ...aiSettings.referencePrep, feather: Number(event.target.value) } })} /></label>
+            <label className="ai-field"><span>テンプレート余白 {Math.round(aiSettings.referencePrep.padding * 100)}%</span><input type="range" min="0" max="0.3" step="0.01" value={aiSettings.referencePrep.padding} onChange={(event) => onAiSettingsChange({ ...aiSettings, referencePrep: { ...aiSettings.referencePrep, padding: Number(event.target.value) } })} /></label>
+            {selectedReferenceAsset ? <div className="reference-prep-preview-grid">
+              <figure><figcaption>Original</figcaption>{selectedReferenceAsset.previewUrl ? <img src={selectedReferenceAsset.previewUrl} alt="original reference" /> : <span>REF</span>}</figure>
+              <figure><figcaption>Extracted</figcaption>{referencePreviewUrl ? <img className="checkerboard" src={referencePreviewUrl} alt="extracted reference" /> : <span className="checkerboard">{referencePreviewError ?? 'Preview…'}</span>}</figure>
+            </div> : <p className="reference-prep-empty">SOURCEで参考画像を選択すると、背景除去プレビューが表示されます。</p>}
+            <button type="button" className="reference-prep-button" disabled={!selectedReferenceAsset || referencePrepRunning} onClick={() => void prepareReference()}>{referencePrepRunning ? '抽出・自動フィット中…' : '背景除去して自動フィット'}</button>
+            <p className="ai-token-help">抽出結果は新規レイヤーとAI GENERATEDへ追加され、Reference Guidedの参照画像として自動選択されます。</p>
           </div>
 
           <div className="ai-section-block">
@@ -522,6 +611,7 @@ export function TextureEditor({ document, assets, referenceAssets, onChange, onE
             <div className="ai-section-title">EXECUTION PREVIEW</div>
             <div className="ai-preview-list">
               <div className="ai-preview-item"><strong>Input</strong><small>{draft.name}</small></div>
+              <div className="ai-preview-item"><strong>Input Policy</strong><small>{aiSettings.mode === 'prompt-only' ? '通常の編集レイヤーを使用' : selectedReferenceAsset ? '参照画像と同じ抽出レイヤーはAI入力から除外' : '参照画像未選択'}</small></div>
               <div className="ai-preview-item"><strong>Mask</strong><small>{aiSettings.maskMode === 'template-alpha' ? 'Template Alpha' : aiSettings.maskMode === 'selected-layer-eraser' ? 'Selected Layer Eraser' : 'Full Canvas'}</small></div>
               <div className="ai-preview-item"><strong>Reference</strong><small>{aiSettings.mode === 'prompt-only' ? '未使用' : selectedReferenceAsset?.name ?? '未選択'}</small></div>
               <div className="ai-preview-item"><strong>Mode</strong><small>{aiSettings.mode}</small></div>

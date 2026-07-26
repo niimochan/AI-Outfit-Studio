@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AosAssetKind,
   AosAiJob,
-  AosAiMaskMode,
   AosAiSettings,
+  AosReferencePrepSettings,
   AosMaterialOverride,
   AosProjectManifest,
   AosTextureDocument,
@@ -23,6 +23,9 @@ import { VrmViewport } from './components/VrmViewport';
 import { TextureEditor } from './components/TextureEditor';
 import {
   canvasToPngBlob,
+  createDefaultTextureLayer,
+  extractReferenceImage,
+  fitPreparedReferenceLayer,
   getImageDimensions,
   renderTextureDocument,
   renderTextureMask,
@@ -493,9 +496,12 @@ export function App() {
     ...generated.map((asset) => ({ id: asset.meta.id, name: asset.meta.name, file: asset.file, previewUrl: asset.previewUrl })),
   ], [generated, references, templates]);
 
-  const referenceSourceAssets = useMemo<TextureSourceAsset[]>(() => (
-    references.map((asset) => ({ id: asset.meta.id, name: asset.meta.name, file: asset.file, previewUrl: asset.previewUrl }))
-  ), [references]);
+  const referenceSourceAssets = useMemo<TextureSourceAsset[]>(() => [
+    ...references.map((asset) => ({ id: asset.meta.id, name: asset.meta.name, file: asset.file, previewUrl: asset.previewUrl })),
+    ...generated
+      .filter((asset) => asset.meta.name.toLowerCase().includes('reference-extract'))
+      .map((asset) => ({ id: asset.meta.id, name: asset.meta.name, file: asset.file, previewUrl: asset.previewUrl })),
+  ], [generated, references]);
 
   const activeTextureDocument = useMemo(
     () => textureDocuments.find((document) => document.id === activeTextureDocumentId) ?? null,
@@ -583,6 +589,73 @@ export function App() {
     setIsDirty(true);
   }, []);
 
+  const prepareReferenceAsset = useCallback(async (
+    document: AosTextureDocument,
+    sourceAssetId: string,
+    settings: AosReferencePrepSettings,
+  ): Promise<string | null> => {
+    const desktop = window.aosDesktop;
+    if (!desktop) {
+      showNotice({ tone: 'error', message: '参考画像の保存はデスクトップ版でのみ利用できます。' });
+      return null;
+    }
+    const sourceRuntime = [...references, ...generated].find((asset) => asset.meta.id === sourceAssetId) ?? null;
+    const templateRuntime = templates.find((asset) => asset.meta.id === document.templateAssetId) ?? null;
+    if (!sourceRuntime) {
+      showNotice({ tone: 'error', message: '抽出元の参考画像が見つかりません。' });
+      return null;
+    }
+    if (!templateRuntime) {
+      showNotice({ tone: 'error', message: '自動フィット先のテンプレートが見つかりません。' });
+      return null;
+    }
+
+    try {
+      const extractedCanvas = await extractReferenceImage(sourceRuntime.file, settings);
+      const extractedBlob = await canvasToPngBlob(extractedCanvas);
+      const safeStem = sourceRuntime.meta.name.replace(/\.[^.]+$/, '').replace(/[\\/:*?"<>|]/g, '_') || 'reference';
+      const payload = await desktop.saveGeneratedAsset({
+        projectId: project.id,
+        filename: `reference-extract-${safeStem}.png`,
+        data: new Uint8Array(await extractedBlob.arrayBuffer()),
+      });
+      const outputAsset = runtimeAssetFromPayload(payload, 'generated');
+      const outputSource: TextureSourceAsset = {
+        id: outputAsset.meta.id,
+        name: outputAsset.meta.name,
+        file: outputAsset.file,
+        previewUrl: outputAsset.previewUrl,
+      };
+      const templateSource: TextureSourceAsset = {
+        id: templateRuntime.meta.id,
+        name: templateRuntime.meta.name,
+        file: templateRuntime.file,
+        previewUrl: templateRuntime.previewUrl,
+      };
+      const baseLayer = await createDefaultTextureLayer(outputSource, document.width, document.height);
+      const fittedLayer = await fitPreparedReferenceLayer(
+        { ...baseLayer, name: `Extracted Reference: ${sourceRuntime.meta.name}` },
+        outputSource,
+        templateSource,
+        document.width,
+        document.height,
+        settings.fitMode,
+        settings.padding,
+      );
+
+      setGenerated((current) => [...current, outputAsset]);
+      setTextureDocuments((current) => current.map((entry) => entry.id === document.id
+        ? { ...entry, layers: [...entry.layers, fittedLayer], updatedAt: new Date().toISOString() }
+        : entry));
+      setIsDirty(true);
+      showNotice({ tone: 'info', message: '参考画像を抽出し、テンプレートへ自動フィットしました。' });
+      return outputAsset.meta.id;
+    } catch (error) {
+      showNotice({ tone: 'error', message: error instanceof Error ? error.message : '参考画像の抽出に失敗しました。' });
+      return null;
+    }
+  }, [generated, project.id, references, showNotice, templates]);
+
   const runAiAssist = useCallback(async (document: AosTextureDocument, selectedLayerId: string | null) => {
     const desktop = window.aosDesktop;
     if (!desktop) {
@@ -595,7 +668,7 @@ export function App() {
     }
 
     const referenceAsset = aiSettings.referenceAssetId
-      ? references.find((asset) => asset.meta.id === aiSettings.referenceAssetId) ?? null
+      ? [...references, ...generated].find((asset) => asset.meta.id === aiSettings.referenceAssetId) ?? null
       : null;
     if (aiSettings.mode !== 'prompt-only' && !referenceAsset) {
       showNotice({ tone: 'warning', message: 'Reference Guidedモードでは参考画像を1枚選択してください。' });
@@ -627,8 +700,14 @@ export function App() {
 
     try {
       const sourceMap = new Map(textureSourceAssets.map((asset) => [asset.id, asset]));
+      const aiInputDocument = aiSettings.mode !== 'prompt-only' && referenceAsset
+        ? {
+          ...document,
+          layers: document.layers.filter((layer) => layer.sourceAssetId !== referenceAsset.meta.id),
+        }
+        : document;
       const [inputCanvas, maskCanvas] = await Promise.all([
-        renderTextureDocument(document, sourceMap),
+        renderTextureDocument(aiInputDocument, sourceMap),
         renderTextureMask(document, sourceMap, aiSettings.maskMode, selectedLayerId),
       ]);
       const [inputBlob, maskBlob, referenceBytes] = await Promise.all([
@@ -698,7 +777,7 @@ export function App() {
       setIsDirty(true);
       showNotice({ tone: 'error', message });
     }
-  }, [aiSettings, project.id, project.name, references, showNotice, textureSourceAssets]);
+  }, [aiSettings, generated, project.id, project.name, references, showNotice, textureSourceAssets]);
 
   useEffect(() => {
     const generation = ++textureRenderGenerationRef.current;
@@ -1020,6 +1099,7 @@ export function App() {
             document={activeTextureDocument}
             assets={textureSourceAssets}
             referenceAssets={referenceSourceAssets}
+            onPrepareReference={prepareReferenceAsset}
             onChange={updateTextureDocument}
             onExport={(document) => void exportTextureDocument(document)}
             onShow3d={() => setWorkspaceMode('3d')}

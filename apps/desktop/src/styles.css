@@ -618,3 +618,71 @@ div.layer-main { cursor: default; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* v0.6 Sprint B - Reference prep / auto extract / auto fit */
+.reference-prep-section {
+  border-color: #385044;
+  background: linear-gradient(180deg, #101a18, #0d1516);
+}
+.reference-prep-preview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+.reference-prep-preview-grid figure {
+  min-width: 0;
+  margin: 0;
+  padding: 5px;
+  border: 1px solid #2b3f47;
+  border-radius: 6px;
+  background: #0b1217;
+}
+.reference-prep-preview-grid figcaption {
+  margin-bottom: 4px;
+  color: #7890a0;
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+.reference-prep-preview-grid img,
+.reference-prep-preview-grid figure > span {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1;
+  border: 1px solid #283c47;
+  border-radius: 4px;
+  object-fit: contain;
+  background-color: #101820;
+  color: #657b8a;
+  font-size: 7px;
+  overflow: hidden;
+}
+.reference-prep-empty {
+  margin: 0;
+  padding: 7px;
+  border: 1px dashed #31454e;
+  border-radius: 5px;
+  color: #6d8392;
+  font-size: 7px;
+  line-height: 1.5;
+}
+.reference-prep-button {
+  width: 100%;
+  border: 1px solid #487f69;
+  border-radius: 5px;
+  padding: 8px;
+  background: linear-gradient(180deg, #2b6957, #204c40);
+  color: #e6fff5;
+  font-size: 8px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.reference-prep-button:hover:not(:disabled) {
+  border-color: #69b899;
+  background: linear-gradient(180deg, #377f6a, #285e4f);
+}
+.reference-prep-button:disabled {
+  opacity: .42;
+  cursor: not-allowed;
+}

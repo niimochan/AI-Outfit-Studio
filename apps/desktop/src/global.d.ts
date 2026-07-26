@@ -19,6 +19,7 @@ declare global {
       getPathForFile: (file: File) => string;
       pickAssets: (kind: AosAssetKind) => Promise<NativeFilePayload[]>;
       exportPng: (request: { defaultName: string; data: Uint8Array }) => Promise<{ canceled: true } | { canceled: false; path: string }>;
+      saveGeneratedAsset: (request: { projectId: string; filename: string; data: Uint8Array }) => Promise<NativeFilePayload>;
       saveProject: (request: {
         path: string | null;
         saveAs: boolean;

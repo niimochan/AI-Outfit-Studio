@@ -1,6 +1,6 @@
-# ComfyUI Integration — v0.5
+# ComfyUI Integration — v0.6
 
-AI Outfit Studio v0.5 can send the active texture document and an inpainting mask to a local or remote ComfyUI server.
+AI Outfit Studio v0.6 can send the active texture document, an inpainting mask, and an optional prepared reference image to a local or remote ComfyUI server.
 
 ## Requirements
 
@@ -37,10 +37,23 @@ The following tokens are replaced before the workflow is queued:
 - `__AOS_MASK_IMAGE__`
 - `__AOS_POSITIVE_PROMPT__`
 - `__AOS_NEGATIVE_PROMPT__`
+- `__AOS_REFERENCE_IMAGE__`
+- `__AOS_REFERENCE_STRENGTH__`
+- `__AOS_DENOISE__`
+- `__AOS_TEMPLATE_PRESERVE__`
+- `__AOS_MODE__`
 - `__AOS_OUTPUT_PREFIX__`
 - `__AOS_SEED__`
 
 AI Outfit Studio also tries to detect common `LoadImage`, `CLIPTextEncode`, and `SaveImage` nodes by class type and node title. Tokens remain the most reliable method when a workflow contains several image loaders or text encoders.
+
+## Reference preparation
+
+`REFERENCE PREP` can remove a simple background from the selected reference image before generation. The transparent result is persisted as an `AI GENERATED` asset and added to the active texture document as a layer.
+
+Because the prepared result becomes part of the input canvas, the included img2img workflow can already react to it. Workflows containing IPAdapter or another reference-image node can also consume the separate `__AOS_REFERENCE_IMAGE__` input.
+
+For automatic image-loader assignment, give the reference `LoadImage` node a title containing `reference`, `style`, or `ipadapter`.
 
 ## Mask modes
 

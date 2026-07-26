@@ -1,4 +1,4 @@
-import type { AosTextureDocument, AosTextureLayer } from '@ai-outfit-studio/common';
+import type { AosReferenceFitMode, AosReferencePrepSettings, AosTextureDocument, AosTextureLayer } from '@ai-outfit-studio/common';
 
 export interface TextureSourceAsset {
   id: string;
@@ -129,6 +129,178 @@ export async function getImageDimensions(file: File): Promise<{ width: number; h
   } finally {
     bitmap.close();
   }
+}
+
+interface AlphaBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+function alphaBounds(imageData: ImageData, alphaThreshold = 8): AlphaBounds | null {
+  const { data, width, height } = imageData;
+  let minX = width;
+  let minY = height;
+  let maxX = -1;
+  let maxY = -1;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const alpha = data[(y * width + x) * 4 + 3] ?? 0;
+      if (alpha <= alphaThreshold) continue;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+  }
+  if (maxX < minX || maxY < minY) return null;
+  return { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 };
+}
+
+function cornerBackgroundColor(imageData: ImageData): [number, number, number] {
+  const { data, width, height } = imageData;
+  const sampleRadiusX = Math.max(2, Math.round(width * 0.025));
+  const sampleRadiusY = Math.max(2, Math.round(height * 0.025));
+  const regions = [
+    [0, 0],
+    [Math.max(0, width - sampleRadiusX), 0],
+    [0, Math.max(0, height - sampleRadiusY)],
+    [Math.max(0, width - sampleRadiusX), Math.max(0, height - sampleRadiusY)],
+  ] as const;
+  let red = 0;
+  let green = 0;
+  let blue = 0;
+  let weight = 0;
+  for (const [startX, startY] of regions) {
+    for (let y = startY; y < Math.min(height, startY + sampleRadiusY); y += 1) {
+      for (let x = startX; x < Math.min(width, startX + sampleRadiusX); x += 1) {
+        const offset = (y * width + x) * 4;
+        const alpha = (data[offset + 3] ?? 0) / 255;
+        if (alpha <= 0.05) continue;
+        red += (data[offset] ?? 0) * alpha;
+        green += (data[offset + 1] ?? 0) * alpha;
+        blue += (data[offset + 2] ?? 0) * alpha;
+        weight += alpha;
+      }
+    }
+  }
+  if (weight <= 0) return [255, 255, 255];
+  return [red / weight, green / weight, blue / weight];
+}
+
+export async function extractReferenceImage(
+  file: File,
+  settings: AosReferencePrepSettings,
+): Promise<HTMLCanvasElement> {
+  const bitmap = await decodeImage(file);
+  const canvas = window.document.createElement('canvas');
+  const maximumDimension = 4096;
+  const downscale = Math.min(1, maximumDimension / Math.max(bitmap.width, bitmap.height));
+  canvas.width = Math.max(1, Math.round(bitmap.width * downscale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * downscale));
+  const context = canvas.getContext('2d', { alpha: true, willReadFrequently: true });
+  if (!context) {
+    bitmap.close();
+    throw new Error('参考画像の抽出用Canvasを初期化できませんでした。');
+  }
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = 'high';
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close();
+
+  if (settings.extractMode === 'alpha-only') return canvas;
+
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  const background: [number, number, number] = settings.extractMode === 'white-background'
+    ? [255, 255, 255]
+    : settings.extractMode === 'black-background'
+      ? [0, 0, 0]
+      : cornerBackgroundColor(imageData);
+  const threshold = clamp01(settings.threshold);
+  const feather = Math.max(0.001, clamp01(settings.feather));
+  const maximumDistance = Math.sqrt(3 * 255 * 255);
+
+  for (let index = 0; index < imageData.data.length; index += 4) {
+    const originalAlpha = (imageData.data[index + 3] ?? 0) / 255;
+    if (originalAlpha <= 0) continue;
+    const redDelta = (imageData.data[index] ?? 0) - background[0];
+    const greenDelta = (imageData.data[index + 1] ?? 0) - background[1];
+    const blueDelta = (imageData.data[index + 2] ?? 0) - background[2];
+    const distance = Math.sqrt(redDelta * redDelta + greenDelta * greenDelta + blueDelta * blueDelta) / maximumDistance;
+    const extractedAlpha = clamp01((distance - threshold + feather * 0.5) / feather);
+    imageData.data[index + 3] = Math.round(255 * originalAlpha * extractedAlpha);
+  }
+  context.clearRect(0, 0, canvas.width, canvas.height);
+  context.putImageData(imageData, 0, 0);
+  return canvas;
+}
+
+async function imageAlphaBounds(file: File): Promise<{ width: number; height: number; bounds: AlphaBounds }> {
+  const bitmap = await decodeImage(file);
+  try {
+    const canvas = window.document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext('2d', { alpha: true, willReadFrequently: true });
+    if (!context) throw new Error('画像のAlpha範囲を解析できませんでした。');
+    context.drawImage(bitmap, 0, 0);
+    const bounds = alphaBounds(context.getImageData(0, 0, canvas.width, canvas.height)) ?? {
+      x: 0,
+      y: 0,
+      width: canvas.width,
+      height: canvas.height,
+    };
+    return { width: canvas.width, height: canvas.height, bounds };
+  } finally {
+    bitmap.close();
+  }
+}
+
+export async function fitPreparedReferenceLayer(
+  layer: AosTextureLayer,
+  source: TextureSourceAsset,
+  template: TextureSourceAsset,
+  documentWidth: number,
+  documentHeight: number,
+  fitMode: AosReferenceFitMode,
+  padding: number,
+): Promise<AosTextureLayer> {
+  if (fitMode === 'contain' || fitMode === 'cover') {
+    return fitTextureLayer(layer, source, documentWidth, documentHeight, fitMode);
+  }
+
+  const [sourceInfo, templateInfo] = await Promise.all([
+    imageAlphaBounds(source.file),
+    imageAlphaBounds(template.file),
+  ]);
+  const normalizedPadding = Math.min(0.3, Math.max(0, padding));
+  const targetBounds = {
+    x: (templateInfo.bounds.x / templateInfo.width) * documentWidth,
+    y: (templateInfo.bounds.y / templateInfo.height) * documentHeight,
+    width: (templateInfo.bounds.width / templateInfo.width) * documentWidth,
+    height: (templateInfo.bounds.height / templateInfo.height) * documentHeight,
+  };
+  const usableWidth = Math.max(1, targetBounds.width * (1 - normalizedPadding * 2));
+  const usableHeight = Math.max(1, targetBounds.height * (1 - normalizedPadding * 2));
+  const scale = Math.min(usableWidth / sourceInfo.bounds.width, usableHeight / sourceInfo.bounds.height);
+  const targetCenterX = targetBounds.x + targetBounds.width / 2;
+  const targetCenterY = targetBounds.y + targetBounds.height / 2;
+  const sourceCenterOffsetX = sourceInfo.bounds.x + sourceInfo.bounds.width / 2 - sourceInfo.width / 2;
+  const sourceCenterOffsetY = sourceInfo.bounds.y + sourceInfo.bounds.height / 2 - sourceInfo.height / 2;
+
+  return {
+    ...layer,
+    x: targetCenterX - sourceCenterOffsetX * scale,
+    y: targetCenterY - sourceCenterOffsetY * scale,
+    scaleX: scale,
+    scaleY: scale,
+    rotation: 0,
+  };
 }
 
 export async function createDefaultTextureLayer(

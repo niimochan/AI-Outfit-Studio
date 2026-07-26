@@ -185,14 +185,21 @@ function defaultAiSettings(): AosAiSettings {
     endpoint: 'http://127.0.0.1:8188',
     workflowName: '',
     workflowJson: '',
-    positivePrompt: 'high quality VRoid clothing texture, preserve UV layout, seamless garment details',
-    negativePrompt: 'text, watermark, logo, extra objects, broken UV layout, cropped texture',
+    positivePrompt: 'flat VRoid clothing texture, garment fabric only, isolated clothing design, no human body, preserve the exact UV template layout, transfer only colors, fabric patterns, trims, ribbons, lace and garment decorations, high quality',
+    negativePrompt: 'person, character, human body, face, head, hair, eyes, arms, hands, fingers, legs, thighs, skin, shoes, full body illustration, character silhouette, background, text, logo, watermark, broken UV layout, cropped texture',
     maskMode: 'template-alpha',
     mode: 'prompt-only',
     referenceAssetId: null,
     referenceStrength: 0.7,
     denoiseStrength: 0.55,
     templatePreserve: 0.85,
+    referencePrep: {
+      extractMode: 'auto-corners',
+      threshold: 0.14,
+      feather: 0.08,
+      fitMode: 'template-bounds',
+      padding: 0.04,
+    },
     timeoutSeconds: 300,
     autoAddResultLayer: true,
   };
@@ -202,6 +209,8 @@ function normalizeAiSettings(value: unknown): AosAiSettings {
   const fallback = defaultAiSettings();
   if (!value || typeof value !== 'object') return fallback;
   const settings = value as Partial<AosAiSettings>;
+  const legacyPositivePrompt = 'high quality VRoid clothing texture, preserve UV layout, seamless garment details';
+  const legacyNegativePrompt = 'text, watermark, logo, extra objects, broken UV layout, cropped texture';
   const maskModes = new Set<AosAiMaskMode>(['template-alpha', 'selected-layer-eraser', 'full-canvas']);
   const aiModes = new Set(['prompt-only', 'reference-guided', 'reference-inpaint']);
   const timeout = typeof settings.timeoutSeconds === 'number' && Number.isFinite(settings.timeoutSeconds)
@@ -210,19 +219,35 @@ function normalizeAiSettings(value: unknown): AosAiSettings {
   const clampUnit = (value: unknown, nextFallback: number) => typeof value === 'number' && Number.isFinite(value)
     ? Math.min(1, Math.max(0, value))
     : nextFallback;
+  const prep = settings.referencePrep && typeof settings.referencePrep === 'object'
+    ? settings.referencePrep as Partial<AosAiSettings['referencePrep']>
+    : {};
+  const extractModes = new Set(['auto-corners', 'white-background', 'black-background', 'alpha-only']);
+  const fitModes = new Set(['template-bounds', 'contain', 'cover']);
   return {
     provider: 'comfyui',
     endpoint: typeof settings.endpoint === 'string' && settings.endpoint.trim() ? settings.endpoint.trim() : fallback.endpoint,
     workflowName: typeof settings.workflowName === 'string' ? settings.workflowName : '',
     workflowJson: typeof settings.workflowJson === 'string' ? settings.workflowJson : '',
-    positivePrompt: typeof settings.positivePrompt === 'string' ? settings.positivePrompt : fallback.positivePrompt,
-    negativePrompt: typeof settings.negativePrompt === 'string' ? settings.negativePrompt : fallback.negativePrompt,
+    positivePrompt: typeof settings.positivePrompt === 'string'
+      ? (settings.positivePrompt.trim() === legacyPositivePrompt ? fallback.positivePrompt : settings.positivePrompt)
+      : fallback.positivePrompt,
+    negativePrompt: typeof settings.negativePrompt === 'string'
+      ? (settings.negativePrompt.trim() === legacyNegativePrompt ? fallback.negativePrompt : settings.negativePrompt)
+      : fallback.negativePrompt,
     maskMode: maskModes.has(settings.maskMode as AosAiMaskMode) ? settings.maskMode as AosAiMaskMode : fallback.maskMode,
     mode: aiModes.has(settings.mode as string) ? settings.mode as AosAiSettings['mode'] : fallback.mode,
     referenceAssetId: typeof settings.referenceAssetId === 'string' && settings.referenceAssetId.trim() ? settings.referenceAssetId : null,
     referenceStrength: clampUnit(settings.referenceStrength, fallback.referenceStrength),
     denoiseStrength: clampUnit(settings.denoiseStrength, fallback.denoiseStrength),
     templatePreserve: clampUnit(settings.templatePreserve, fallback.templatePreserve),
+    referencePrep: {
+      extractMode: extractModes.has(prep.extractMode as string) ? prep.extractMode as AosAiSettings['referencePrep']['extractMode'] : fallback.referencePrep.extractMode,
+      threshold: clampUnit(prep.threshold, fallback.referencePrep.threshold),
+      feather: clampUnit(prep.feather, fallback.referencePrep.feather),
+      fitMode: fitModes.has(prep.fitMode as string) ? prep.fitMode as AosAiSettings['referencePrep']['fitMode'] : fallback.referencePrep.fitMode,
+      padding: Math.min(0.3, clampUnit(prep.padding, fallback.referencePrep.padding)),
+    },
     timeoutSeconds: timeout,
     autoAddResultLayer: settings.autoAddResultLayer !== false,
   };
@@ -272,7 +297,7 @@ function validateManifest(value: unknown): AosProjectManifest {
     aiJobs?: unknown;
   };
   if (
-    (manifest.schemaVersion !== 1 && manifest.schemaVersion !== 2 && manifest.schemaVersion !== 3 && manifest.schemaVersion !== 4 && manifest.schemaVersion !== 5) ||
+    (manifest.schemaVersion !== 1 && manifest.schemaVersion !== 2 && manifest.schemaVersion !== 3 && manifest.schemaVersion !== 4 && manifest.schemaVersion !== 5 && manifest.schemaVersion !== 6) ||
     typeof manifest.id !== 'string' ||
     typeof manifest.name !== 'string' ||
     typeof manifest.createdAt !== 'string' ||
@@ -287,7 +312,7 @@ function validateManifest(value: unknown): AosProjectManifest {
   const assets = manifest.assets as AosProjectManifest['assets'] & { generated?: AosProjectAsset[] };
   return {
     ...(manifest as Omit<AosProjectManifest, 'schemaVersion' | 'assets' | 'materialOverrides' | 'textureDocuments' | 'aiSettings' | 'aiJobs'>),
-    schemaVersion: 5,
+    schemaVersion: 6,
     assets: {
       avatar: assets.avatar ?? null,
       references: assets.references,
@@ -768,6 +793,10 @@ app.whenReady().then(() => {
     const targetPath = result.filePath.toLowerCase().endsWith('.png') ? result.filePath : `${result.filePath}.png`;
     await writeFile(targetPath, Buffer.from(request.data));
     return { canceled: false, path: targetPath } as const;
+  });
+
+  ipcMain.handle('asset:save-generated', async (_event, request: { projectId: string; filename: string; data: Uint8Array }) => {
+    return saveGeneratedOutput(request.projectId, request.filename, request.data);
   });
 
   ipcMain.handle('project:save', async (event, request: { path: string | null; saveAs: boolean; manifest: AosProjectManifest }) => {

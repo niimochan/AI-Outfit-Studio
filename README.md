@@ -2,9 +2,9 @@
 
 AIを活用したVRM・VRoid向け衣装制作環境です。
 
-現在のリリースは **Version 0.5 AI Texture Assist Foundation / Sprint 05** です。VRM表示、`.aos`プロジェクト管理、マテリアルプレビュー、非破壊2Dテクスチャ編集に加え、ローカルComfyUIへ画像・マスク・プロンプトを送信して生成結果を新規レイヤーとして受け取れる基盤を搭載しています。
+現在のリリースは **Version 0.6 Auto Extract & Auto Fit Foundation / Sprint 06** です。参考衣装画像の背景をローカル処理で除去し、VRoidテンプレートのAlpha範囲へ自動配置してからComfyUI生成へ渡せます。
 
-## Version 0.5でできること
+## Version 0.6でできること
 
 - VRM 0.x / VRM 1.0の読み込みと3D表示
 - 回転・ズーム・パン・全身表示・カメラリセット
@@ -24,7 +24,14 @@ AIを活用したVRM・VRoid向け衣装制作環境です。
 - ComfyUIキュー監視、タイムアウト、出力取得、エラー表示
 - AI生成結果を`AI GENERATED`へ保存し、新規レイヤーとして自動追加
 - AI処理履歴と設定を`.aos`へ保存・復元
-- Schema 1 / 2 / 3プロジェクトをSchema 4へ自動移行
+- 参考画像の四隅から背景色を自動推定
+- 白背景、黒背景、既存Alphaのみの抽出モード
+- 抽出しきい値と境界フェザーのリアルタイム調整
+- Original / Extractedの比較プレビュー
+- テンプレートAlpha範囲への自動フィット
+- 抽出PNGをAI GENERATEDと新規レイヤーへ保存
+- 抽出結果をReference Guidedの参照画像として自動選択
+- Schema 1 / 2 / 3 / 4 / 5プロジェクトをSchema 6へ自動移行
 
 ## 必要環境
 
@@ -64,6 +71,18 @@ npm.cmd run dev
 - **ホイール**：ズーム
 - **Ctrl+Z**：Undo
 - **Ctrl+Y / Ctrl+Shift+Z**：Redo
+
+## 参考画像の自動抽出と配置
+
+1. `REFERENCES`へ衣装参考画像を追加する
+2. Texture Editorの`AI ASSIST > SOURCE`で参考画像を選択する
+3. `REFERENCE PREP`で背景抽出モードを選ぶ
+4. しきい値とフェザーを調整し、Extractedプレビューを確認する
+5. 自動フィット方法を選ぶ
+6. 「背景除去して自動フィット」を押す
+7. 透過PNGと新規レイヤーが追加されたことを確認する
+
+複雑な背景ではローカル色抽出だけで完全に切り抜けない場合があります。その場合はしきい値を調整するか、後続SprintのAIセグメンテーションを使用します。
 
 ## ComfyUI連携
 
@@ -106,7 +125,7 @@ npm.cmd run dev
 
 ## `.aos`形式
 
-Version 0.5はSchema 4を使用します。プロジェクト情報、ローカルアセットへのリンク、AI生成物へのリンク、マテリアル差分、テクスチャ編集ドキュメント、ComfyUI設定、AI履歴をJSONとして保存します。VRMや元画像そのものは`.aos`へ埋め込みません。
+Version 0.6はSchema 6を使用します。プロジェクト情報、ローカルアセットへのリンク、AI生成物へのリンク、マテリアル差分、テクスチャ編集ドキュメント、ComfyUI設定、AI履歴をJSONとして保存します。VRMや元画像そのものは`.aos`へ埋め込みません。
 
 詳細は[`docs/aos-project-format.md`](docs/aos-project-format.md)を参照してください。
 

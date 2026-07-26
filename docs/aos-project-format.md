@@ -1,19 +1,19 @@
-# `.aos` Project Format — Schema 5
+# `.aos` Project Format — Schema 6
 
 ## Status
 
-- Application version: 0.5.1
-- Schema version: 5
+- Application version: 0.6.1
+- Schema version: 6
 - Encoding: UTF-8 JSON
 - Storage model: linked assets
-- Backward compatibility: Schema 1 / 2 / 3 / 4を自動移行
+- Backward compatibility: Schema 1 / 2 / 3 / 4 / 5を自動移行
 
 ## Top-level fields
 
 ```json
 {
-  "schemaVersion": 5,
-  "appVersion": "0.5.1",
+  "schemaVersion": 6,
+  "appVersion": "0.6.1",
   "id": "project-uuid",
   "name": "Akane Outfit Project",
   "createdAt": "2026-07-25T01:00:00.000Z",
@@ -92,6 +92,13 @@
   "referenceStrength": 0.7,
   "denoiseStrength": 0.55,
   "templatePreserve": 0.85,
+  "referencePrep": {
+    "extractMode": "auto-corners",
+    "threshold": 0.14,
+    "feather": 0.08,
+    "fitMode": "template-bounds",
+    "padding": 0.04
+  },
   "timeoutSeconds": 300,
   "autoAddResultLayer": true
 }
@@ -102,6 +109,14 @@
 - `template-alpha`
 - `selected-layer-eraser`
 - `full-canvas`
+
+`referencePrep`は参考画像のローカル前処理設定です。
+
+- `extractMode`: `auto-corners` / `white-background` / `black-background` / `alpha-only`
+- `threshold`: 背景との色距離しきい値
+- `feather`: Alpha境界のぼかし幅
+- `fitMode`: `template-bounds` / `contain` / `cover`
+- `padding`: テンプレートAlpha範囲内の余白
 
 ## AI jobs
 
@@ -153,9 +168,11 @@ texture-document:<document-id>
 - Schema 1 → Material・Texture・AI関連の初期値を追加
 - Schema 2 → Texture・AI関連の初期値を追加
 - Schema 3 → `assets.generated`、`aiSettings`、`aiJobs`を追加
-- 読み込み時にメモリ上でSchema 5へ正規化
-- 元ファイルは開いただけでは変更せず、次回保存時にSchema 5で保存
+- Schema 4 → Reference-Aware AI設定の初期値を追加
+- Schema 5 → `referencePrep`の初期値を追加
+- 読み込み時にメモリ上でSchema 6へ正規化
+- 元ファイルは開いただけでは変更せず、次回保存時にSchema 6で保存
 
 ## Portability
 
-Schema 5も`sourcePath`に絶対パスを保存するリンク型です。元のVRM・参考画像・テンプレートを移動または削除すると復元できません。AI生成画像はElectronのユーザーデータ領域に保存されるため、別PCへ移動する場合は生成画像もコピーする必要があります。
+Schema 6も`sourcePath`に絶対パスを保存するリンク型です。元のVRM・参考画像・テンプレートを移動または削除すると復元できません。AI生成画像はElectronのユーザーデータ領域に保存されるため、別PCへ移動する場合は生成画像もコピーする必要があります。
